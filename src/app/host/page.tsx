@@ -20,10 +20,10 @@ function HostContent() {
   const [promptText, setPromptText] = useState('');
   const [copied, setCopied] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [showChat, setShowChat] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const { overlayState, triggerPhaseTransition, triggerBloodSplash } = useCinematicOverlay();
 
-  // Phase cinematics for host too
   useEffect(() => {
     if (phaseData?.phase && session?.isStarted) triggerPhaseTransition(phaseData.phase);
   }, [phaseData?.phase]);
@@ -32,7 +32,6 @@ function HostContent() {
     if (voteResult?.eliminated) triggerBloodSplash();
   }, [voteResult]);
 
-  // Auto-create session
   useEffect(() => {
     if (isConnected && !hasCreated) {
       createSession().then(ok => {
@@ -45,7 +44,6 @@ function HostContent() {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  // Parse roles from myRole.teammates (host receives "name:ROLE" format)
   const playerRoles = myRole?.teammates.map(t => {
     const [name, role] = t.split(':');
     return { name, role };
@@ -71,7 +69,6 @@ function HostContent() {
   const currentPhase = session?.phase || GamePhase.LOBBY;
   const phaseInfo = PHASE_INFO[currentPhase];
   const alivePlayers = session?.players.filter(p => p.isAlive) || [];
-  const deadPlayers = session?.players.filter(p => !p.isAlive) || [];
 
   if (!session) {
     return (
@@ -112,36 +109,251 @@ function HostContent() {
     );
   }
 
+  // ===== Phase Control Buttons =====
+  const PhaseButtons = () => {
+    const allReady = nightReadiness?.allReady || false;
+    const hasVoteResult = !!voteResult;
+    type StepId = 'night' | 'resolve' | 'discussion' | 'voting' | 'result';
+    let nextStep: StepId = 'night';
+
+    if (currentPhase === 'LOBBY') nextStep = 'night';
+    if (currentPhase === 'NIGHT' && !allReady) nextStep = 'night';
+    if (currentPhase === 'NIGHT' && allReady) nextStep = 'resolve';
+    if (currentPhase === 'MORNING') nextStep = 'discussion';
+    if (currentPhase === 'DISCUSSION') nextStep = 'voting';
+    if (currentPhase === 'VOTING' && !hasVoteResult) nextStep = 'voting';
+    if (currentPhase === 'VOTING' && hasVoteResult) nextStep = 'result';
+    if (currentPhase === 'RESULT') nextStep = 'night';
+
+    const isNext = (step: StepId) => nextStep === step;
+    const normal = 'bg-white/5 text-white/60 hover:bg-white/10 active:bg-white/15';
+    const glow = (color: string) => `${color} ring-2 ring-white/30 shadow-lg shadow-white/5`;
+    const glowPulse = (color: string) => `${color} ring-2 ring-white/30 shadow-lg shadow-white/5 animate-pulse`;
+
+    return (
+      <div className="grid grid-cols-3 gap-1.5">
+        <button onClick={() => hostSetPhase('NIGHT')}
+          className={`py-2.5 rounded-lg text-xs font-bold transition-all ${isNext('night') ? glow('bg-indigo-500/40 text-indigo-100') : normal}`}>
+          🌙 ليل
+        </button>
+        <button onClick={hostResolveNight}
+          className={`py-2.5 rounded-lg text-xs font-bold transition-all ${isNext('resolve') ? glowPulse('bg-green-500/40 text-green-100') : normal}`}>
+          ⚡ نفّذ
+        </button>
+        <button onClick={() => hostSetPhase('DISCUSSION')}
+          className={`py-2.5 rounded-lg text-xs font-bold transition-all ${isNext('discussion') ? glow('bg-amber-500/40 text-amber-100') : normal}`}>
+          💬 نقاش
+        </button>
+        <button onClick={() => hostSetPhase('VOTING')}
+          className={`py-2.5 rounded-lg text-xs font-bold transition-all ${isNext('voting') ? glow('bg-emerald-500/40 text-emerald-100') : normal}`}>
+          🗳️ تصويت
+        </button>
+        <button onClick={() => hostSetPhase('RESULT')}
+          className={`py-2.5 rounded-lg text-xs font-bold transition-all ${isNext('result') ? glow('bg-purple-500/40 text-purple-100') : normal}`}>
+          📊 نتيجة
+        </button>
+        <button onClick={() => hostSetPhase('MORNING')}
+          className={`py-2.5 rounded-lg text-xs font-bold transition-all ${normal}`}>
+          🌅 صباح
+        </button>
+      </div>
+    );
+  };
+
+  // ===== Status Info =====
+  const StatusInfo = () => (
+    <div className="space-y-2">
+      {/* Chat/Voting toggles */}
+      <div className="grid grid-cols-2 gap-1.5">
+        <button onClick={session.chatOpen ? hostCloseChat : hostOpenChat}
+          className={`py-2 rounded-lg text-xs font-bold transition-all ${session.chatOpen ? 'bg-green-500/30 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
+          {session.chatOpen ? '🔓 شات' : '🔒 شات'}
+        </button>
+        <button onClick={session.votingOpen ? hostCloseVoting : hostOpenVoting}
+          className={`py-2 rounded-lg text-xs font-bold transition-all ${session.votingOpen ? 'bg-green-500/30 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
+          {session.votingOpen ? '🗳️ مفتوح' : '🗳️ مغلق'}
+        </button>
+      </div>
+
+      {/* Vote Progress */}
+      {voteUpdate && (
+        <div className="bg-white/5 rounded-lg p-2">
+          <p className="text-xs text-doubt-muted">صوّت {voteUpdate.totalVotes} من {voteUpdate.totalEligible}</p>
+        </div>
+      )}
+
+      {/* Vote Result */}
+      {voteResult && (
+        <div className="bg-white/5 rounded-lg p-2">
+          {voteResult.eliminated ? (
+            <p className="text-xs text-doubt-accent">⚖️ طرد: {voteResult.eliminatedName}</p>
+          ) : voteResult.isTie ? (
+            <p className="text-xs text-doubt-gold">تعادل</p>
+          ) : (
+            <p className="text-xs text-doubt-muted">لا تصويت</p>
+          )}
+        </div>
+      )}
+
+      {/* Night Readiness */}
+      {currentPhase === 'NIGHT' && nightReadiness && (
+        <div className="bg-white/5 rounded-xl p-2 space-y-1">
+          <p className="text-xs text-doubt-muted font-bold">🌙 جاهزية</p>
+          {nightReadiness.hasMafia && (
+            <div className={`flex items-center gap-2 px-2 py-1 rounded text-xs ${nightReadiness.mafiaReady ? 'text-green-400' : 'text-doubt-muted'}`}>
+              🔪 <span className="flex-1">المافيا</span> {nightReadiness.mafiaReady ? '✓' : '⏳'}
+            </div>
+          )}
+          {nightReadiness.hasDoctor && (
+            <div className={`flex items-center gap-2 px-2 py-1 rounded text-xs ${nightReadiness.doctorReady ? 'text-green-400' : 'text-doubt-muted'}`}>
+              🩺 <span className="flex-1">الطبيب</span> {nightReadiness.doctorReady ? '✓' : '⏳'}
+            </div>
+          )}
+          {nightReadiness.hasDetective && (
+            <div className={`flex items-center gap-2 px-2 py-1 rounded text-xs ${nightReadiness.detectiveReady ? 'text-green-400' : 'text-doubt-muted'}`}>
+              🕵️ <span className="flex-1">المحقق</span> {nightReadiness.detectiveReady ? '✓' : '⏳'}
+            </div>
+          )}
+          {nightReadiness.allReady && (
+            <p className="text-[10px] text-green-400 animate-pulse text-center">✨ الجميع جاهز!</p>
+          )}
+        </div>
+      )}
+
+      {/* Morning Result */}
+      {morningResult && (
+        <div className="bg-white/5 rounded-lg p-2">
+          {morningResult.killed ? (
+            <p className="text-xs text-doubt-accent">💀 قُتل: {morningResult.killedName}</p>
+          ) : (
+            <p className="text-xs text-green-400">😌 لم يُقتل أحد</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="min-h-screen flex flex-col phase-lobby">
       <CinematicOverlay state={overlayState} />
+
       {/* Top Bar */}
-      <div className="bg-black/50 border-b border-white/10 px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="text-doubt-gold font-bold">🎮 المدير</span>
-          <span className="text-xs text-doubt-muted bg-white/5 px-2 py-1 rounded">{phaseInfo.icon} {phaseInfo.name}</span>
-          {session.isStarted && <span className="text-xs text-doubt-gold">R{session.round}</span>}
-        </div>
+      <div className="bg-black/50 border-b border-white/10 px-3 py-2 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
+          <span className="text-doubt-gold font-bold text-sm">🎮 المدير</span>
+          <span className="text-[10px] text-doubt-muted bg-white/5 px-1.5 py-0.5 rounded">{phaseInfo.icon} {phaseInfo.name}</span>
+          {session.isStarted && <span className="text-[10px] text-doubt-gold">R{session.round}</span>}
+        </div>
+        <div className="flex items-center gap-1.5">
           <button onClick={() => setIsMuted(toggleMute())}
-            className="text-xs bg-white/5 px-2 py-1 rounded hover:bg-white/10 transition-colors">
-            {isMuted ? '🔇' : '🔊'}
-          </button>
-          <span className="text-xs text-doubt-muted">{session.players.length} لاعب</span>
+            className="text-xs bg-white/5 px-2 py-1 rounded hover:bg-white/10">{isMuted ? '🔇' : '🔊'}</button>
+          {session.isStarted && (
+            <button onClick={() => setShowChat(!showChat)}
+              className={`text-xs px-2 py-1 rounded transition-all md:hidden ${showChat ? 'bg-doubt-gold/30 text-doubt-gold' : 'bg-white/5'}`}>
+              💬 {messages.length > 0 ? messages.length : ''}
+            </button>
+          )}
+          <span className="text-[10px] text-doubt-muted">{session.players.length}👤</span>
           <span className="text-xs font-mono text-doubt-gold">{session.code}</span>
         </div>
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Sidebar - Control Panel */}
-        <div className="w-72 bg-black/30 border-l border-white/10 flex flex-col overflow-y-auto p-3 space-y-3">
-
+      {/* ===== MOBILE LAYOUT ===== */}
+      <div className="flex-1 flex flex-col md:hidden overflow-hidden">
+        {/* Controls always visible on mobile */}
+        <div className="bg-black/30 border-b border-white/10 p-3 space-y-2 shrink-0 overflow-y-auto max-h-[55vh]">
           {/* Join Link */}
+          {!session.isStarted && (
+            <button onClick={copyLink}
+              className="w-full py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-sm font-bold">
+              {copied ? '✅ تم النسخ!' : '📋 نسخ الرابط'}
+            </button>
+          )}
+
+          {/* Players - compact horizontal */}
+          <div className="flex flex-wrap gap-1">
+            {session.players.map(p => {
+              const roleInfo = playerRoles.find(r => r.name === p.name);
+              return (
+                <span key={p.id} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] ${!p.isAlive ? 'opacity-40 line-through bg-white/5' : 'bg-white/5'}`}>
+                  {!p.isAlive ? '💀' : roleInfo ? roleIcons[roleInfo.role] || '👤' : '👤'} {p.name}
+                </span>
+              );
+            })}
+          </div>
+
+          {/* Game Controls */}
+          {!session.isStarted ? (
+            <button onClick={hostStartGame} disabled={session.players.length < 2}
+              className="w-full py-3 bg-doubt-accent hover:bg-doubt-accent/80 rounded-xl font-bold disabled:opacity-30">
+              🚀 ابدأ اللعبة ({session.players.length})
+            </button>
+          ) : (
+            <>
+              <PhaseButtons />
+              <StatusInfo />
+            </>
+          )}
+
+          {/* Mafia Chat */}
+          {mafiaMessages.length > 0 && (
+            <div className="bg-doubt-accent/5 border border-doubt-accent/20 rounded-lg p-2">
+              <p className="text-[10px] text-doubt-accent font-bold mb-1">🔴 المافيا</p>
+              {mafiaMessages.map(msg => (
+                <div key={msg.id} className="text-[10px] text-doubt-accent/80">
+                  <span className="font-bold">{msg.playerName}:</span> {msg.text}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Chat area (toggleable on mobile) */}
+        {showChat && (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {messages.length === 0 && <p className="text-center text-doubt-muted/30 text-sm py-8">💬 لا رسائل</p>}
+              {messages.map(msg => (
+                <div key={msg.id} className={`flex ${msg.isHost ? 'justify-center' : 'justify-end'}`}>
+                  {msg.isHost ? (
+                    <div className="bg-doubt-gold/10 border border-doubt-gold/20 px-3 py-1.5 rounded-2xl">
+                      <p className="text-xs text-doubt-gold">{msg.text}</p>
+                    </div>
+                  ) : (
+                    <div className="bg-white/5 px-3 py-1.5 rounded-2xl rounded-tl-sm max-w-[80%]">
+                      <p className="text-[10px] text-doubt-muted font-bold">{msg.playerName}</p>
+                      <p className="text-xs">{msg.text}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+              <div ref={chatEndRef} />
+            </div>
+            <div className="border-t border-white/10 p-2">
+              <div className="flex gap-2">
+                <input type="text" value={promptText} onChange={(e) => setPromptText(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handlePrompt()}
+                  placeholder="رسالة للجميع..."
+                  className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm placeholder:text-doubt-muted/50 focus:outline-none focus:border-doubt-gold/30" dir="rtl" />
+                <button onClick={handlePrompt} disabled={!promptText.trim()}
+                  className="px-4 py-2.5 bg-doubt-gold/20 text-doubt-gold rounded-xl text-sm font-bold disabled:opacity-30">
+                  ↑
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ===== DESKTOP LAYOUT ===== */}
+      <div className="flex-1 hidden md:flex overflow-hidden">
+        {/* Sidebar */}
+        <div className="w-72 bg-black/30 border-l border-white/10 flex flex-col overflow-y-auto p-3 space-y-3">
           {!session.isStarted && (
             <div className="bg-white/5 rounded-xl p-3">
               <p className="text-xs text-doubt-muted mb-2">رابط الانضمام</p>
               <button onClick={copyLink}
-                className="w-full py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-sm font-bold transition-all hover:bg-doubt-gold/30">
+                className="w-full py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-sm font-bold hover:bg-doubt-gold/30">
                 {copied ? '✅ تم النسخ!' : '📋 نسخ الرابط'}
               </button>
             </div>
@@ -164,159 +376,19 @@ function HostContent() {
             </div>
           </div>
 
-          {/* Game Controls */}
           {!session.isStarted ? (
             <button onClick={hostStartGame} disabled={session.players.length < 2}
-              className="w-full py-3 bg-doubt-accent hover:bg-doubt-accent/80 rounded-xl font-bold transition-all
-                         disabled:opacity-30 disabled:cursor-not-allowed">
+              className="w-full py-3 bg-doubt-accent hover:bg-doubt-accent/80 rounded-xl font-bold disabled:opacity-30 disabled:cursor-not-allowed">
               🚀 ابدأ اللعبة ({session.players.length})
             </button>
           ) : (
             <div className="space-y-2">
-              <p className="text-xs text-doubt-muted">التحكم بالمراحل</p>
-
-              {/* Phase flow guide - next step glows, all buttons always work */}
-              {(() => {
-                const allReady = nightReadiness?.allReady || false;
-                const hasVoteResult = !!voteResult;
-                type StepId = 'night' | 'resolve' | 'discussion' | 'voting' | 'result';
-                let nextStep: StepId = 'night';
-
-                if (currentPhase === 'LOBBY') nextStep = 'night';
-                if (currentPhase === 'NIGHT' && !allReady) nextStep = 'night';
-                if (currentPhase === 'NIGHT' && allReady) nextStep = 'resolve';
-                if (currentPhase === 'MORNING') nextStep = 'discussion';
-                if (currentPhase === 'DISCUSSION') nextStep = 'voting';
-                if (currentPhase === 'VOTING' && !hasVoteResult) nextStep = 'voting';
-                if (currentPhase === 'VOTING' && hasVoteResult) nextStep = 'result';
-                if (currentPhase === 'RESULT') nextStep = 'night';
-
-                const isNext = (step: StepId) => nextStep === step;
-                const normal = 'bg-white/5 text-white/60 hover:bg-white/10';
-                const glow = (color: string) => `${color} ring-2 ring-white/30 shadow-lg shadow-white/5`;
-                const glowPulse = (color: string) => `${color} ring-2 ring-white/30 shadow-lg shadow-white/5 animate-pulse`;
-
-                return (
-                  <>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button onClick={() => hostSetPhase('NIGHT')}
-                        className={`py-2.5 rounded-lg text-xs font-bold transition-all ${
-                          isNext('night') ? glow('bg-indigo-500/40 text-indigo-100') : normal
-                        }`}>
-                        🌙 ليل
-                      </button>
-                      <button onClick={hostResolveNight}
-                        className={`py-2.5 rounded-lg text-xs font-bold transition-all ${
-                          isNext('resolve') ? glowPulse('bg-green-500/40 text-green-100') : normal
-                        }`}>
-                        ⚡ نفّذ الليل
-                      </button>
-                      <button onClick={() => hostSetPhase('DISCUSSION')}
-                        className={`py-2.5 rounded-lg text-xs font-bold transition-all ${
-                          isNext('discussion') ? glow('bg-amber-500/40 text-amber-100') : normal
-                        }`}>
-                        💬 نقاش
-                      </button>
-                      <button onClick={() => hostSetPhase('VOTING')}
-                        className={`py-2.5 rounded-lg text-xs font-bold transition-all ${
-                          isNext('voting') ? glow('bg-emerald-500/40 text-emerald-100') : normal
-                        }`}>
-                        🗳️ تصويت
-                      </button>
-                      <button onClick={() => hostSetPhase('RESULT')}
-                        className={`py-2.5 rounded-lg text-xs font-bold transition-all ${
-                          isNext('result') ? glow('bg-purple-500/40 text-purple-100') : normal
-                        }`}>
-                        📊 نتيجة
-                      </button>
-                      <button onClick={() => hostSetPhase('MORNING')}
-                        className={`py-2.5 rounded-lg text-xs font-bold transition-all ${normal}`}>
-                        🌅 صباح
-                      </button>
-                    </div>
-                  </>
-                );
-              })()}
-
-              {/* Chat/Voting toggles */}
-              <div className="grid grid-cols-2 gap-1.5">
-                <button onClick={session.chatOpen ? hostCloseChat : hostOpenChat}
-                  className={`py-2 rounded-lg text-xs font-bold transition-all ${session.chatOpen ? 'bg-green-500/30 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
-                  {session.chatOpen ? '🔓 شات مفتوح' : '🔒 شات مغلق'}
-                </button>
-                <button onClick={session.votingOpen ? hostCloseVoting : hostOpenVoting}
-                  className={`py-2 rounded-lg text-xs font-bold transition-all ${session.votingOpen ? 'bg-green-500/30 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
-                  {session.votingOpen ? '🗳️ تصويت مفتوح' : '🗳️ تصويت مغلق'}
-                </button>
-              </div>
-
-              {/* Vote Progress */}
-              {voteUpdate && (
-                <div className="bg-white/5 rounded-lg p-2">
-                  <p className="text-xs text-doubt-muted">صوّت {voteUpdate.totalVotes} من {voteUpdate.totalEligible}</p>
-                </div>
-              )}
-
-              {/* Vote Result */}
-              {voteResult && (
-                <div className="bg-white/5 rounded-lg p-2">
-                  {voteResult.eliminated ? (
-                    <p className="text-xs text-doubt-accent">⚖️ طرد: {voteResult.eliminatedName}</p>
-                  ) : voteResult.isTie ? (
-                    <p className="text-xs text-doubt-gold">تعادل</p>
-                  ) : (
-                    <p className="text-xs text-doubt-muted">لا تصويت</p>
-                  )}
-                </div>
-              )}
-
-              {/* Night Readiness Panel */}
-              {currentPhase === 'NIGHT' && nightReadiness && (
-                <div className="bg-white/5 rounded-xl p-3 space-y-2">
-                  <p className="text-xs text-doubt-muted font-bold">🌙 جاهزية الليل</p>
-                  {nightReadiness.hasMafia && (
-                    <div className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs ${nightReadiness.mafiaReady ? 'bg-green-500/10 text-green-400' : 'bg-white/5 text-doubt-muted'}`}>
-                      <span>🔪</span>
-                      <span className="flex-1">المافيا</span>
-                      <span>{nightReadiness.mafiaReady ? '✓ جاهز' : '⏳ ينتظر...'}</span>
-                    </div>
-                  )}
-                  {nightReadiness.hasDoctor && (
-                    <div className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs ${nightReadiness.doctorReady ? 'bg-green-500/10 text-green-400' : 'bg-white/5 text-doubt-muted'}`}>
-                      <span>🩺</span>
-                      <span className="flex-1">الطبيب</span>
-                      <span>{nightReadiness.doctorReady ? '✓ جاهز' : '⏳ ينتظر...'}</span>
-                    </div>
-                  )}
-                  {nightReadiness.hasDetective && (
-                    <div className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs ${nightReadiness.detectiveReady ? 'bg-green-500/10 text-green-400' : 'bg-white/5 text-doubt-muted'}`}>
-                      <span>🕵️</span>
-                      <span className="flex-1">المحقق</span>
-                      <span>{nightReadiness.detectiveReady ? '✓ جاهز' : '⏳ ينتظر...'}</span>
-                    </div>
-                  )}
-                  {nightReadiness.allReady && (
-                    <div className="mt-1 text-center">
-                      <span className="text-[10px] text-green-400 animate-pulse">✨ الجميع جاهز - نفّذ الليل!</span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Morning Result */}
-              {morningResult && (
-                <div className="bg-white/5 rounded-lg p-2">
-                  {morningResult.killed ? (
-                    <p className="text-xs text-doubt-accent">💀 قُتل: {morningResult.killedName}</p>
-                  ) : (
-                    <p className="text-xs text-green-400">😌 لم يُقتل أحد</p>
-                  )}
-                </div>
-              )}
+              <p className="text-xs text-doubt-muted">التحكم</p>
+              <PhaseButtons />
+              <StatusInfo />
             </div>
           )}
 
-          {/* Mafia Chat (Host sees it) */}
           {mafiaMessages.length > 0 && (
             <div className="bg-doubt-accent/5 border border-doubt-accent/20 rounded-xl p-3">
               <p className="text-xs text-doubt-accent font-bold mb-2">🔴 قناة المافيا</p>
@@ -329,14 +401,10 @@ function HostContent() {
           )}
         </div>
 
-        {/* Main Area - Chat */}
+        {/* Chat Area */}
         <div className="flex-1 flex flex-col">
           <div className="flex-1 overflow-y-auto p-4 space-y-2">
-            {messages.length === 0 && (
-              <div className="text-center py-12">
-                <p className="text-doubt-muted/30 text-sm">💬 لا رسائل بعد</p>
-              </div>
-            )}
+            {messages.length === 0 && <p className="text-center py-12 text-doubt-muted/30 text-sm">💬 لا رسائل بعد</p>}
             {messages.map(msg => (
               <div key={msg.id} className={`flex ${msg.isHost ? 'justify-center' : 'justify-end'}`}>
                 {msg.isHost ? (
@@ -354,18 +422,14 @@ function HostContent() {
             ))}
             <div ref={chatEndRef} />
           </div>
-
-          {/* Host Prompt Input */}
           <div className="border-t border-white/10 p-3">
             <div className="flex gap-2">
               <input type="text" value={promptText} onChange={(e) => setPromptText(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handlePrompt()}
                 placeholder="أرسل رسالة للجميع..."
-                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm
-                           placeholder:text-doubt-muted/50 focus:outline-none focus:border-doubt-gold/30" dir="rtl" />
+                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm placeholder:text-doubt-muted/50 focus:outline-none focus:border-doubt-gold/30" dir="rtl" />
               <button onClick={handlePrompt} disabled={!promptText.trim()}
-                className="px-6 py-3 bg-doubt-gold/20 text-doubt-gold rounded-xl text-sm font-bold
-                           transition-all disabled:opacity-30 hover:bg-doubt-gold/30">
+                className="px-6 py-3 bg-doubt-gold/20 text-doubt-gold rounded-xl text-sm font-bold disabled:opacity-30 hover:bg-doubt-gold/30">
                 إرسال
               </button>
             </div>
