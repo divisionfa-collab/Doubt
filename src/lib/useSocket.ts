@@ -18,44 +18,17 @@ import type {
   ChatMessage,
   MafiaChatMessage,
   DetectiveResult,
+  BaseResponse,
+  SessionResponse,
 } from '@/types/game';
 
 const SOCKET_URL = typeof window !== 'undefined'
   ? (process.env.NODE_ENV === 'production' ? window.location.origin : 'http://localhost:3001')
   : 'http://localhost:3001';
+
 type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-interface UseSocketReturn {
-  isConnected: boolean;
-  session: GameSession | null;
-  playerId: string | null;
-  myRole: RoleAssignment | null;
-  phaseData: PhaseChangeData | null;
-  timerData: TimerData | null;
-  nightTarget: NightTargetData | null;
-  morningResult: MorningResult | null;
-  voteUpdate: VoteUpdateData | null;
-  voteResult: VoteResultData | null;
-  messages: ChatMessage[];
-  mafiaMessages: MafiaChatMessage[];
-  detectiveResult: DetectiveResult | null;
-  detectiveHistory: DetectiveResult[];
-  doctorConfirm: string | null;
-  detectiveConfirm: string | null;
-  gameOver: GameOverData | null;
-  error: string | null;
-  createSession: (playerName: string) => Promise<boolean>;
-  joinSession: (code: string, playerName: string) => Promise<boolean>;
-  startGame: () => Promise<boolean>;
-  selectNightTarget: (targetId: string) => Promise<boolean>;
-  doctorProtect: (targetId: string) => Promise<boolean>;
-  detectiveCheck: (targetId: string) => Promise<boolean>;
-  sendMafiaChat: (text: string) => Promise<boolean>;
-  castVote: (targetId: string) => Promise<boolean>;
-  sendMessage: (text: string) => Promise<boolean>;
-}
-
-export function useSocket(): UseSocketReturn {
+export function useSocket() {
   const socketRef = useRef<GameSocket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [session, setSession] = useState<GameSession | null>(null);
@@ -84,9 +57,9 @@ export function useSocket(): UseSocketReturn {
 
     socket.on('connect', () => { setIsConnected(true); setError(null); });
     socket.on('disconnect', () => { setIsConnected(false); });
-    socket.on('session:updated', (s) => setSession(s));
+    socket.on('session:updated', (s: GameSession) => setSession(s));
 
-    socket.on('phase:changed', (data) => {
+    socket.on('phase:changed', (data: PhaseChangeData) => {
       setPhaseData(data);
       if (data.phase === 'NIGHT') {
         setNightTarget(null);
@@ -108,37 +81,66 @@ export function useSocket(): UseSocketReturn {
       }
     });
 
-    socket.on('timer:tick', (data) => setTimerData(data));
-    socket.on('player:joined', (p) => console.log(`👤 ${p.name} joined`));
-    socket.on('player:left', (id) => console.log(`👋 ${id} left`));
+    socket.on('timer:tick', (data: TimerData) => setTimerData(data));
+    socket.on('player:joined', (p: Player) => console.log(`👤 ${p.name} joined`));
+    socket.on('player:left', (id: string) => console.log(`👋 ${id} left`));
 
-    socket.on('role:assigned', (data) => setMyRole(data));
-    socket.on('night:target_selected', (data) => setNightTarget(data));
-    socket.on('night:doctor_selected', (data) => setDoctorConfirm(data.targetName));
-    socket.on('night:detective_selected', (data) => setDetectiveConfirm(data.targetName));
-    socket.on('morning:kill_result', (data) => setMorningResult(data));
+    socket.on('role:assigned', (data: RoleAssignment) => setMyRole(data));
+    socket.on('night:target_selected', (data: NightTargetData) => setNightTarget(data));
+    socket.on('night:doctor_selected', (data: { targetName: string }) => setDoctorConfirm(data.targetName));
+    socket.on('night:detective_selected', (data: { targetName: string }) => setDetectiveConfirm(data.targetName));
+    socket.on('morning:kill_result', (data: MorningResult) => setMorningResult(data));
 
-    socket.on('detective:result', (data) => {
+    socket.on('detective:result', (data: DetectiveResult) => {
       setDetectiveResult(data);
-      setDetectiveHistory(prev => [...prev, data]);
-      // إخفاء بعد 5 ثواني
+      setDetectiveHistory((prev: DetectiveResult[]) => [...prev, data]);
       setTimeout(() => setDetectiveResult(null), 5000);
     });
 
-    socket.on('mafia:message', (msg) => setMafiaMessages(prev => [...prev, msg]));
-    socket.on('vote:update', (data) => setVoteUpdate(data));
-    socket.on('vote:result', (data) => setVoteResult(data));
-    socket.on('chat:message', (msg) => setMessages(prev => [...prev, msg]));
-    socket.on('game:over', (data) => setGameOver(data));
-    socket.on('error', (msg) => setError(msg));
+    socket.on('mafia:message', (msg: MafiaChatMessage) => setMafiaMessages((prev: MafiaChatMessage[]) => [...prev, msg]));
+    socket.on('vote:update', (data: VoteUpdateData) => setVoteUpdate(data));
+    socket.on('vote:result', (data: VoteResultData) => setVoteResult(data));
+    socket.on('chat:message', (msg: ChatMessage) => setMessages((prev: ChatMessage[]) => [...prev, msg]));
+    socket.on('game:over', (data: GameOverData) => setGameOver(data));
+    socket.on('error', (msg: string) => setError(msg));
 
     return () => { socket.disconnect(); };
   }, []);
 
-  const emit = useCallback((event: string, ...args: any[]): Promise<boolean> => {
+  const createSession = useCallback(async (playerName: string): Promise<boolean> => {
     return new Promise((resolve) => {
       if (!socketRef.current) { setError('غير متصل'); resolve(false); return; }
-      (socketRef.current as any).emit(event, ...args, (r: any) => {
+      socketRef.current.emit('session:create', playerName, (r: SessionResponse) => {
+        if (r.success && r.session) { setSession(r.session); setPlayerId(r.playerId || null); setError(null); resolve(true); }
+        else { setError(r.error || 'فشل'); resolve(false); }
+      });
+    });
+  }, []);
+
+  const joinSession = useCallback(async (code: string, playerName: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (!socketRef.current) { setError('غير متصل'); resolve(false); return; }
+      socketRef.current.emit('session:join', code, playerName, (r: SessionResponse) => {
+        if (r.success && r.session) { setSession(r.session); setPlayerId(r.playerId || null); setError(null); resolve(true); }
+        else { setError(r.error || 'فشل'); resolve(false); }
+      });
+    });
+  }, []);
+
+  const emitSimple = useCallback((event: keyof ClientToServerEvents, arg: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (!socketRef.current) { setError('غير متصل'); resolve(false); return; }
+      (socketRef.current as any).emit(event, arg, (r: BaseResponse) => {
+        if (r.success) { setError(null); resolve(true); }
+        else { setError(r.error || 'فشل'); resolve(false); }
+      });
+    });
+  }, []);
+
+  const emitNoArg = useCallback((event: keyof ClientToServerEvents): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (!socketRef.current) { setError('غير متصل'); resolve(false); return; }
+      (socketRef.current as any).emit(event, (r: BaseResponse) => {
         if (r.success) { setError(null); resolve(true); }
         else { setError(r.error || 'فشل'); resolve(false); }
       });
@@ -150,14 +152,14 @@ export function useSocket(): UseSocketReturn {
     nightTarget, morningResult, voteUpdate, voteResult, messages,
     mafiaMessages, detectiveResult, detectiveHistory, doctorConfirm, detectiveConfirm,
     gameOver, error,
-    createSession: useCallback((n: string) => emit('session:create', n), [emit]),
-    joinSession: useCallback((c: string, n: string) => emit('session:join', c, n), [emit]),
-    startGame: useCallback(() => emit('game:start'), [emit]),
-    selectNightTarget: useCallback((t: string) => emit('night:select_target', t), [emit]),
-    doctorProtect: useCallback((t: string) => emit('night:doctor_protect', t), [emit]),
-    detectiveCheck: useCallback((t: string) => emit('night:detective_check', t), [emit]),
-    sendMafiaChat: useCallback((t: string) => emit('mafia:chat', t), [emit]),
-    castVote: useCallback((t: string) => emit('vote:cast', t), [emit]),
-    sendMessage: useCallback((t: string) => emit('chat:send', t), [emit]),
+    createSession,
+    joinSession,
+    startGame: useCallback(() => emitNoArg('game:start'), [emitNoArg]),
+    selectNightTarget: useCallback((t: string) => emitSimple('night:select_target', t), [emitSimple]),
+    doctorProtect: useCallback((t: string) => emitSimple('night:doctor_protect', t), [emitSimple]),
+    detectiveCheck: useCallback((t: string) => emitSimple('night:detective_check', t), [emitSimple]),
+    sendMafiaChat: useCallback((t: string) => emitSimple('mafia:chat', t), [emitSimple]),
+    castVote: useCallback((t: string) => emitSimple('vote:cast', t), [emitSimple]),
+    sendMessage: useCallback((t: string) => emitSimple('chat:send', t), [emitSimple]),
   };
 }
