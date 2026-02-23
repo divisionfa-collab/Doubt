@@ -1,8 +1,6 @@
 // ============================================
 // Doubt Game - Game Engine
-// Sprint 6: Advanced Night System
-// ============================================
-// NIGHT → MORNING → DISCUSSION → REBUTTAL → VOTING → RESULT → NIGHT...
+// EO-01: Host-Managed Game (No Timers)
 // ============================================
 
 import {
@@ -14,9 +12,10 @@ import {
   ChatMessage,
   MafiaChatMessage,
   NightActions,
+  NightReadiness,
   DetectiveResult,
+  AudioCuePayload,
   PhaseChangeData,
-  TimerData,
   RoleAssignment,
   NightTargetData,
   MorningResult,
@@ -24,15 +23,11 @@ import {
   VoteUpdateData,
   VoteResultData,
   VoteCount,
-  PHASE_DURATIONS,
   PHASE_INFO,
-  MAX_MESSAGES_PER_PHASE,
-  MAX_MESSAGE_LENGTH,
   MAX_MAFIA_CHAT_LENGTH,
   MAX_MAFIA_MESSAGES,
   getRoleDistribution,
 } from '../types/game';
-import { PhaseTimer } from '../lib/timer';
 
 // ============================================
 // Helpers
@@ -41,9 +36,7 @@ import { PhaseTimer } from '../lib/timer';
 function generateCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
-  for (let i = 0; i < 4; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
+  for (let i = 0; i < 4; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
   return code;
 }
 
@@ -61,12 +54,7 @@ function shuffle<T>(array: T[]): T[] {
 }
 
 function emptyNightActions(): NightActions {
-  return {
-    mafiaTarget: null,
-    doctorProtect: null,
-    detectiveCheck: null,
-    lastDoctorProtect: null,
-  };
+  return { mafiaTarget: null, doctorProtect: null, detectiveCheck: null, lastDoctorProtect: null };
 }
 
 // ============================================
@@ -76,7 +64,6 @@ function emptyNightActions(): NightActions {
 const sessions: Map<string, GameSession> = new Map();
 const codeToSessionId: Map<string, string> = new Map();
 const playerToSession: Map<string, string> = new Map();
-const sessionTimers: Map<string, PhaseTimer> = new Map();
 
 // ============================================
 // Callbacks
@@ -84,7 +71,6 @@ const sessionTimers: Map<string, PhaseTimer> = new Map();
 
 interface EngineCallbacks {
   onPhaseChange: (sessionId: string, data: PhaseChangeData) => void;
-  onTimerTick: (sessionId: string, data: TimerData) => void;
   onSessionUpdated: (sessionId: string, session: GameSession) => void;
   onRoleAssigned: (playerId: string, data: RoleAssignment) => void;
   onNightTargetSelected: (sessionId: string, data: NightTargetData, mafiaOnly: boolean) => void;
@@ -93,10 +79,14 @@ interface EngineCallbacks {
   onMorningResult: (sessionId: string, data: MorningResult) => void;
   onDetectiveResult: (playerId: string, data: DetectiveResult) => void;
   onMafiaMessage: (sessionId: string, message: MafiaChatMessage) => void;
+  onNightReadiness: (hostId: string, data: NightReadiness) => void;
   onVoteUpdate: (sessionId: string, data: VoteUpdateData) => void;
   onVoteResult: (sessionId: string, data: VoteResultData) => void;
   onChatMessage: (sessionId: string, message: ChatMessage) => void;
+  onChatState: (sessionId: string, open: boolean) => void;
+  onVotingState: (sessionId: string, open: boolean) => void;
   onGameOver: (sessionId: string, data: GameOverData) => void;
+  onAudioCue: (sessionId: string, cue: AudioCuePayload) => void;
 }
 
 let callbacks: EngineCallbacks | null = null;
@@ -109,34 +99,29 @@ export function setCallbacks(cb: EngineCallbacks): void {
 // Session Management
 // ============================================
 
-export function createSession(playerName: string, playerId: string): { session: GameSession; player: Player } {
+export function createSession(hostId: string): { session: GameSession } {
   const sessionId = generateId();
   let code = generateCode();
-  while (codeToSessionId.has(code)) { code = generateCode(); }
-
-  const player: Player = {
-    id: playerId, name: playerName, role: null, isAlive: true,
-    isHost: true, isConnected: true, joinedAt: Date.now(),
-  };
+  while (codeToSessionId.has(code)) code = generateCode();
 
   const session: GameSession = {
-    id: sessionId, code, players: [player],
+    id: sessionId, code, hostId,
+    players: [],
     phase: GamePhase.LOBBY, round: 0,
-    phaseStartedAt: 0, phaseEndsAt: 0,
     isStarted: false, isGameOver: false, winResult: null,
     nightActions: emptyNightActions(),
-    lastKilled: null, lastKilledName: null, wasSaved: false,
+    lastKilled: null, lastKilledName: null,
+    chatOpen: false, messages: [],
     mafiaMessages: [], mafiaMsgCount: {},
-    votes: {}, voteResult: null,
-    messages: [], messageCount: {},
+    votingOpen: false, votes: {}, voteResult: null,
     createdAt: Date.now(),
   };
 
   sessions.set(sessionId, session);
   codeToSessionId.set(code, sessionId);
-  playerToSession.set(playerId, sessionId);
-  console.log(`🎮 Session created: ${code} by ${playerName}`);
-  return { session, player };
+  playerToSession.set(hostId, sessionId);
+  console.log(`🎮 Session created: ${code} (host: ${hostId})`);
+  return { session };
 }
 
 export function joinSession(code: string, playerName: string, playerId: string): { session: GameSession; player: Player } | { error: string } {
@@ -145,13 +130,12 @@ export function joinSession(code: string, playerName: string, playerId: string):
 
   const session = sessions.get(sessionId);
   if (!session) return { error: 'الجلسة غير موجودة' };
-  if (session.isStarted) return { error: 'اللعبة بدأت بالفعل' };
-  if (session.players.length >= 12) return { error: 'الجلسة ممتلئة' };
+  if (session.players.length >= 20) return { error: 'الجلسة ممتلئة' };
   if (session.players.some(p => p.name === playerName)) return { error: 'الاسم مستخدم' };
 
   const player: Player = {
-    id: playerId, name: playerName, role: null, isAlive: true,
-    isHost: false, isConnected: true, joinedAt: Date.now(),
+    id: playerId, name: playerName, role: null,
+    isAlive: true, isConnected: true, joinedAt: Date.now(),
   };
 
   session.players.push(player);
@@ -167,21 +151,18 @@ export function leaveSession(playerId: string): { sessionId: string; session: Ga
   const session = sessions.get(sessionId);
   if (!session) return null;
 
-  session.players = session.players.filter(p => p.id !== playerId);
-  playerToSession.delete(playerId);
-
-  if (session.players.length === 0) {
+  // Host left - destroy session
+  if (playerId === session.hostId) {
     destroySession(sessionId);
     return { sessionId, session: null };
   }
 
-  if (!session.players.some(p => p.isHost)) {
-    session.players[0].isHost = true;
-  }
+  session.players = session.players.filter(p => p.id !== playerId);
+  playerToSession.delete(playerId);
 
   if (session.isStarted && !session.isGameOver) {
     const winCheck = checkWinCondition(session);
-    if (winCheck) { endGame(sessionId, winCheck); }
+    if (winCheck) endGame(sessionId, winCheck);
   }
 
   return { sessionId, session };
@@ -190,15 +171,137 @@ export function leaveSession(playerId: string): { sessionId: string; session: Ga
 function destroySession(sessionId: string): void {
   const session = sessions.get(sessionId);
   if (!session) return;
-  const timer = sessionTimers.get(sessionId);
-  if (timer) { timer.stop(); sessionTimers.delete(sessionId); }
   codeToSessionId.delete(session.code);
+  playerToSession.delete(session.hostId);
   session.players.forEach(p => playerToSession.delete(p.id));
   sessions.delete(sessionId);
 }
 
 // ============================================
-// Role Assignment (Sprint 6)
+// Host Commands
+// ============================================
+
+function verifyHost(hostId: string): { session: GameSession; sessionId: string } | { error: string } {
+  const sessionId = playerToSession.get(hostId);
+  if (!sessionId) return { error: 'لست في جلسة' };
+  const session = sessions.get(sessionId);
+  if (!session) return { error: 'جلسة غير موجودة' };
+  if (session.hostId !== hostId) return { error: 'لست المدير' };
+  return { session, sessionId };
+}
+
+export function startGame(hostId: string): { success: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  if (session.isStarted) return { success: false, error: 'بدأت بالفعل' };
+  if (session.players.length < 2) return { success: false, error: 'يجب لاعبان على الأقل' };
+
+  session.isStarted = true;
+  session.round = 1;
+  console.log(`\n🚀 Game started: ${session.code} (${session.players.length} players)`);
+
+  assignRoles(session);
+  setPhase(sessionId, GamePhase.NIGHT);
+  return { success: true };
+}
+
+export function hostSetPhase(hostId: string, phaseStr: string): { success: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  if (!session.isStarted) return { success: false, error: 'اللعبة لم تبدأ' };
+
+  const phase = phaseStr as GamePhase;
+  if (!Object.values(GamePhase).includes(phase)) return { success: false, error: 'مرحلة غير صالحة' };
+
+  if (phase === GamePhase.NIGHT) session.round++;
+  setPhase(sessionId, phase);
+  return { success: true };
+}
+
+export function hostOpenChat(hostId: string): { success: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  session.chatOpen = true;
+  if (callbacks) callbacks.onChatState(sessionId, true);
+  console.log(`💬 [${session.code}] Chat OPENED`);
+  return { success: true };
+}
+
+export function hostCloseChat(hostId: string): { success: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  session.chatOpen = false;
+  if (callbacks) callbacks.onChatState(sessionId, false);
+  console.log(`🔇 [${session.code}] Chat CLOSED`);
+  return { success: true };
+}
+
+export function hostOpenVoting(hostId: string): { success: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  session.votingOpen = true;
+  session.votes = {};
+  session.voteResult = null;
+  if (callbacks) callbacks.onVotingState(sessionId, true);
+  console.log(`🗳️ [${session.code}] Voting OPENED`);
+  return { success: true };
+}
+
+export function hostCloseVoting(hostId: string): { success: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  session.votingOpen = false;
+  if (callbacks) callbacks.onVotingState(sessionId, false);
+  resolveVotes(sessionId);
+  console.log(`🔒 [${session.code}] Voting CLOSED`);
+  return { success: true };
+}
+
+export function hostResolveNight(hostId: string): { success: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { sessionId } = result;
+
+  executeNightKill(sessionId);
+  return { success: true };
+}
+
+export function hostSendPrompt(hostId: string, text: string): { success: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  const cleanText = text.trim();
+  if (!cleanText) return { success: false, error: 'رسالة فارغة' };
+
+  const message: ChatMessage = {
+    id: generateId(),
+    playerId: session.hostId,
+    playerName: '🎮 المدير',
+    text: cleanText,
+    isHost: true,
+    timestamp: Date.now(),
+  };
+
+  session.messages.push(message);
+  if (callbacks) callbacks.onChatMessage(sessionId, message);
+  return { success: true };
+}
+
+// ============================================
+// Role Assignment
 // ============================================
 
 function assignRoles(session: GameSession): void {
@@ -216,11 +319,19 @@ function assignRoles(session: GameSession): void {
     if (callbacks) {
       callbacks.onRoleAssigned(player.id, {
         role: player.role!,
-        teammates: player.role === PlayerRole.MAFIA
-          ? mafiaNames.filter(n => n !== player.name) : [],
+        teammates: player.role === PlayerRole.MAFIA ? mafiaNames.filter(n => n !== player.name) : [],
       });
     }
   });
+
+  // إرسال كل الأدوار للـ Host
+  if (callbacks) {
+    const allRoles = session.players.map(p => ({ name: p.name, role: p.role! }));
+    callbacks.onRoleAssigned(session.hostId, {
+      role: PlayerRole.CITIZEN, // dummy
+      teammates: allRoles.map(r => `${r.name}:${r.role}`),
+    });
+  }
 
   const roleLog = session.players.map(p => {
     const icons: Record<string, string> = { MAFIA: '🔪', CITIZEN: '🏘️', DOCTOR: '🩺', DETECTIVE: '🕵️' };
@@ -230,162 +341,166 @@ function assignRoles(session: GameSession): void {
 }
 
 // ============================================
-// Game Start
+// Phase Management (No Timers)
 // ============================================
 
-export function startGame(playerId: string): { success: boolean; error?: string } {
-  const sessionId = playerToSession.get(playerId);
-  if (!sessionId) return { success: false, error: 'لست في جلسة' };
-
+function setPhase(sessionId: string, phase: GamePhase): void {
   const session = sessions.get(sessionId);
-  if (!session) return { success: false, error: 'جلسة غير موجودة' };
+  if (!session || session.isGameOver) return;
 
-  const player = session.players.find(p => p.id === playerId);
-  if (!player?.isHost) return { success: false, error: 'فقط المضيف' };
-  if (session.isStarted) return { success: false, error: 'بدأت بالفعل' };
-  if (session.players.length < 2) return { success: false, error: 'يجب لاعبان على الأقل' };
+  session.phase = phase;
 
-  session.isStarted = true;
-  session.round = 1;
-  console.log(`\n🚀 Game started: ${session.code} (${session.players.length} players)`);
+  if (phase === GamePhase.NIGHT) {
+    const lastProtect = session.nightActions.lastDoctorProtect;
+    session.nightActions = emptyNightActions();
+    session.nightActions.lastDoctorProtect = lastProtect;
+    session.voteResult = null;
+    session.mafiaMessages = [];
+    session.mafiaMsgCount = {};
+    session.chatOpen = false;
+    session.votingOpen = false;
+  }
+  if (phase === GamePhase.DISCUSSION) {
+    session.messages = [];
+    session.chatOpen = true;
+  }
+  if (phase === GamePhase.VOTING) {
+    session.votes = {};
+    session.voteResult = null;
+    session.votingOpen = true;
+    session.chatOpen = false;
+  }
+  if (phase === GamePhase.RESULT) {
+    session.chatOpen = false;
+    session.votingOpen = false;
+  }
 
-  assignRoles(session);
-  transitionToPhase(sessionId, GamePhase.NIGHT);
-  return { success: true };
+  const info = PHASE_INFO[phase];
+  console.log(`${info.icon} [${session.code}] → ${info.name} R${session.round}`);
+
+  if (callbacks) {
+    callbacks.onPhaseChange(sessionId, { phase, round: session.round, info });
+    // Always sync chat and voting state with clients on phase change
+    callbacks.onChatState(sessionId, session.chatOpen);
+    callbacks.onVotingState(sessionId, session.votingOpen);
+    callbacks.onSessionUpdated(sessionId, session);
+  }
+
+  // Send initial night readiness to host
+  if (phase === GamePhase.NIGHT) sendNightReadiness(sessionId);
 }
 
 // ============================================
-// Night Actions (Sprint 6)
+// Night Readiness (Host-only status)
 // ============================================
 
-/** المافيا تختار هدف القتل */
+function sendNightReadiness(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session || !callbacks) return;
+
+  const alivePlayers = session.players.filter(p => p.isAlive);
+  const hasMafia = alivePlayers.some(p => p.role === PlayerRole.MAFIA);
+  const hasDoctor = alivePlayers.some(p => p.role === PlayerRole.DOCTOR);
+  const hasDetective = alivePlayers.some(p => p.role === PlayerRole.DETECTIVE);
+
+  const mafiaReady = !hasMafia || session.nightActions.mafiaTarget !== null;
+  const doctorReady = !hasDoctor || session.nightActions.doctorProtect !== null;
+  const detectiveReady = !hasDetective || session.nightActions.detectiveCheck !== null;
+
+  const data: NightReadiness = {
+    mafiaReady, doctorReady, detectiveReady,
+    hasMafia, hasDoctor, hasDetective,
+    allReady: mafiaReady && doctorReady && detectiveReady,
+  };
+
+  callbacks.onNightReadiness(session.hostId, data);
+}
+
+// ============================================
+// Night Actions
+// ============================================
+
 export function selectNightTarget(playerId: string, targetId: string): { success: boolean; error?: string } {
   const sessionId = playerToSession.get(playerId);
   if (!sessionId) return { success: false, error: 'لست في جلسة' };
-
   const session = sessions.get(sessionId);
   if (!session) return { success: false, error: 'جلسة غير موجودة' };
   if (session.phase !== GamePhase.NIGHT) return { success: false, error: 'ليس وقت الليل' };
 
   const player = session.players.find(p => p.id === playerId);
-  if (!player) return { success: false, error: 'غير موجود' };
-  if (player.role !== PlayerRole.MAFIA) return { success: false, error: 'لست مافيا' };
-  if (!player.isAlive) return { success: false, error: 'أنت مُقصى' };
+  if (!player || player.role !== PlayerRole.MAFIA || !player.isAlive) return { success: false, error: 'غير مسموح' };
 
-  const target = session.players.find(p => p.id === targetId);
-  if (!target) return { success: false, error: 'هدف غير موجود' };
-  if (!target.isAlive) return { success: false, error: 'الهدف مُقصى' };
-  if (target.role === PlayerRole.MAFIA) return { success: false, error: 'لا تستهدف زميلك' };
+  const target = session.players.find(p => p.id === targetId && p.isAlive && p.role !== PlayerRole.MAFIA);
+  if (!target) return { success: false, error: 'هدف غير صالح' };
 
   session.nightActions.mafiaTarget = targetId;
-
-  if (callbacks) {
-    callbacks.onNightTargetSelected(sessionId, {
-      targetId: target.id, targetName: target.name, selectedBy: player.name,
-    }, true);
-  }
+  if (callbacks) callbacks.onNightTargetSelected(sessionId, { targetId: target.id, targetName: target.name, selectedBy: player.name }, true);
+  sendNightReadiness(sessionId);
   return { success: true };
 }
 
-/** الطبيب يحمي لاعب */
 export function doctorProtect(playerId: string, targetId: string): { success: boolean; error?: string } {
   const sessionId = playerToSession.get(playerId);
   if (!sessionId) return { success: false, error: 'لست في جلسة' };
-
   const session = sessions.get(sessionId);
-  if (!session) return { success: false, error: 'جلسة غير موجودة' };
-  if (session.phase !== GamePhase.NIGHT) return { success: false, error: 'ليس وقت الليل' };
+  if (!session || session.phase !== GamePhase.NIGHT) return { success: false, error: 'ليس وقت الليل' };
 
   const player = session.players.find(p => p.id === playerId);
-  if (!player) return { success: false, error: 'غير موجود' };
-  if (player.role !== PlayerRole.DOCTOR) return { success: false, error: 'لست طبيب' };
-  if (!player.isAlive) return { success: false, error: 'أنت مُقصى' };
+  if (!player || player.role !== PlayerRole.DOCTOR || !player.isAlive) return { success: false, error: 'غير مسموح' };
 
-  const target = session.players.find(p => p.id === targetId);
-  if (!target) return { success: false, error: 'هدف غير موجود' };
-  if (!target.isAlive) return { success: false, error: 'الهدف مُقصى' };
-
-  // منع حماية نفس الشخص ليلتين متتاليتين
-  if (session.nightActions.lastDoctorProtect === targetId) {
-    return { success: false, error: 'لا يمكن حماية نفس الشخص ليلتين متتاليتين' };
-  }
+  const target = session.players.find(p => p.id === targetId && p.isAlive);
+  if (!target) return { success: false, error: 'هدف غير صالح' };
+  if (session.nightActions.lastDoctorProtect === targetId) return { success: false, error: 'لا يمكن حماية نفس الشخص ليلتين' };
 
   session.nightActions.doctorProtect = targetId;
-
-  if (callbacks) {
-    callbacks.onDoctorSelected(playerId, { targetName: target.name });
-  }
+  if (callbacks) callbacks.onDoctorSelected(playerId, { targetName: target.name });
+  sendNightReadiness(sessionId);
   return { success: true };
 }
 
-/** المحقق يفحص لاعب */
 export function detectiveCheck(playerId: string, targetId: string): { success: boolean; error?: string } {
   const sessionId = playerToSession.get(playerId);
   if (!sessionId) return { success: false, error: 'لست في جلسة' };
-
   const session = sessions.get(sessionId);
-  if (!session) return { success: false, error: 'جلسة غير موجودة' };
-  if (session.phase !== GamePhase.NIGHT) return { success: false, error: 'ليس وقت الليل' };
+  if (!session || session.phase !== GamePhase.NIGHT) return { success: false, error: 'ليس وقت الليل' };
 
   const player = session.players.find(p => p.id === playerId);
-  if (!player) return { success: false, error: 'غير موجود' };
-  if (player.role !== PlayerRole.DETECTIVE) return { success: false, error: 'لست محقق' };
-  if (!player.isAlive) return { success: false, error: 'أنت مُقصى' };
+  if (!player || player.role !== PlayerRole.DETECTIVE || !player.isAlive) return { success: false, error: 'غير مسموح' };
 
-  const target = session.players.find(p => p.id === targetId);
-  if (!target) return { success: false, error: 'هدف غير موجود' };
-  if (!target.isAlive) return { success: false, error: 'الهدف مُقصى' };
-  if (target.id === playerId) return { success: false, error: 'لا يمكن فحص نفسك' };
+  const target = session.players.find(p => p.id === targetId && p.isAlive && p.id !== playerId);
+  if (!target) return { success: false, error: 'هدف غير صالح' };
 
   session.nightActions.detectiveCheck = targetId;
-
-  if (callbacks) {
-    callbacks.onDetectiveSelected(playerId, { targetName: target.name });
-  }
+  if (callbacks) callbacks.onDetectiveSelected(playerId, { targetName: target.name });
+  sendNightReadiness(sessionId);
   return { success: true };
 }
 
-/** قناة المافيا السرية */
 export function sendMafiaChat(playerId: string, text: string): { success: boolean; error?: string } {
   const sessionId = playerToSession.get(playerId);
   if (!sessionId) return { success: false, error: 'لست في جلسة' };
-
   const session = sessions.get(sessionId);
-  if (!session) return { success: false, error: 'جلسة غير موجودة' };
-  if (session.phase !== GamePhase.NIGHT) return { success: false, error: 'ليس وقت الليل' };
+  if (!session || session.phase !== GamePhase.NIGHT) return { success: false, error: 'ليس وقت الليل' };
 
   const player = session.players.find(p => p.id === playerId);
-  if (!player) return { success: false, error: 'غير موجود' };
-  if (player.role !== PlayerRole.MAFIA) return { success: false, error: 'لست مافيا' };
-  if (!player.isAlive) return { success: false, error: 'أنت مُقصى' };
+  if (!player || player.role !== PlayerRole.MAFIA || !player.isAlive) return { success: false, error: 'غير مسموح' };
 
   const count = session.mafiaMsgCount[playerId] || 0;
-  if (count >= MAX_MAFIA_MESSAGES) {
-    return { success: false, error: 'استنفدت رسائلك' };
-  }
+  if (count >= MAX_MAFIA_MESSAGES) return { success: false, error: 'استنفدت رسائلك' };
 
   const cleanText = text.trim().slice(0, MAX_MAFIA_CHAT_LENGTH);
-  if (cleanText.length === 0) return { success: false, error: 'رسالة فارغة' };
+  if (!cleanText) return { success: false, error: 'رسالة فارغة' };
 
-  const message: MafiaChatMessage = {
-    id: generateId(),
-    playerId: player.id,
-    playerName: player.name,
-    text: cleanText,
-    timestamp: Date.now(),
-  };
-
+  const message: MafiaChatMessage = { id: generateId(), playerId: player.id, playerName: player.name, text: cleanText, timestamp: Date.now() };
   session.mafiaMessages.push(message);
   session.mafiaMsgCount[playerId] = count + 1;
 
-  if (callbacks) {
-    callbacks.onMafiaMessage(sessionId, message);
-  }
+  if (callbacks) callbacks.onMafiaMessage(sessionId, message);
   return { success: true };
 }
 
 // ============================================
-// Night Resolution (Sprint 6)
+// Night Resolution
 // ============================================
 
 function executeNightKill(sessionId: string): void {
@@ -393,134 +508,103 @@ function executeNightKill(sessionId: string): void {
   if (!session) return;
 
   const { mafiaTarget, doctorProtect: protect, detectiveCheck: check } = session.nightActions;
+  let killed = false, killedName: string | null = null, killedId: string | null = null;
 
-  let killed = false;
-  let killedName: string | null = null;
-  let killedId: string | null = null;
-  let wasSaved = false;
-
-  // 1. حل القتل
   if (mafiaTarget) {
     if (protect && mafiaTarget === protect) {
-      // الطبيب أنقذ الهدف!
-      wasSaved = true;
       console.log(`🩺 [${session.code}] Doctor saved the target!`);
     } else {
-      const target = session.players.find(p => p.id === mafiaTarget);
-      if (target && target.isAlive) {
-        target.isAlive = false;
-        killed = true;
-        killedName = target.name;
-        killedId = target.id;
-      }
+      const target = session.players.find(p => p.id === mafiaTarget && p.isAlive);
+      if (target) { target.isAlive = false; killed = true; killedName = target.name; killedId = target.id; }
     }
   }
 
   session.lastKilled = killedId;
   session.lastKilledName = killedName;
-  session.wasSaved = wasSaved;
-
-  // 2. حفظ آخر حماية للطبيب (لمنع التكرار)
   session.nightActions.lastDoctorProtect = protect;
 
-  const aliveCount = session.players.filter(p => p.isAlive).length;
-
-  // لا نكشف سبب عدم القتل - نخفي الإنقاذ عن الجميع
-  if (callbacks) {
-    callbacks.onMorningResult(sessionId, { killed, killedName, killedId, wasSaved: false, aliveCount });
-  }
-
-  // 3. إرسال نتيجة المحقق
+  // Detective result (immediate - private to detective)
   if (check) {
     const detective = session.players.find(p => p.role === PlayerRole.DETECTIVE && p.isAlive);
     const target = session.players.find(p => p.id === check);
-
     if (detective && target && callbacks) {
-      const result: DetectiveResult = {
-        targetId: target.id,
-        targetName: target.name,
-        isMafia: target.role === PlayerRole.MAFIA,
-      };
-      callbacks.onDetectiveResult(detective.id, result);
-      console.log(`🕵️ [${session.code}] Detective checked ${target.name} → ${result.isMafia ? 'MAFIA!' : 'innocent'}`);
+      callbacks.onDetectiveResult(detective.id, { targetId: target.id, targetName: target.name, isMafia: target.role === PlayerRole.MAFIA });
     }
   }
 
-  // 4. تحقق فوز
-  const winCheck = checkWinCondition(session);
-  if (winCheck) { endGame(sessionId, winCheck); return; }
+  // Cinematic sequence: audio + visual WHILE still in NIGHT phase
+  // Players hear/see effects while "sleeping" - then morning comes
+  if (killed && callbacks) {
+    // 0ms: Duck + Cry
+    const cryCue: AudioCuePayload = { type: 'duck_and_play', file: 'cry', duckTo: 0.1 };
+    callbacks.onAudioCue(sessionId, cryCue);
 
-  transitionToPhase(sessionId, GamePhase.MORNING);
+    // 1.5s: Footsteps
+    const walksCue: AudioCuePayload = { type: 'play_only', file: 'walks', delayMs: 1500 };
+    callbacks.onAudioCue(sessionId, walksCue);
+
+    // 8s: Transition to morning (after effects finish)
+    setTimeout(() => {
+      const s = sessions.get(sessionId);
+      if (!s || s.isGameOver) return;
+      const aliveCount = s.players.filter(p => p.isAlive).length;
+      if (callbacks) callbacks.onMorningResult(sessionId, { killed: true, killedName, killedId, aliveCount });
+      const winCheck = checkWinCondition(s);
+      if (winCheck) { endGame(sessionId, winCheck); return; }
+      setPhase(sessionId, GamePhase.MORNING);
+    }, 8000);
+  } else {
+    // No kill - transition immediately
+    const aliveCount = session.players.filter(p => p.isAlive).length;
+    if (callbacks) callbacks.onMorningResult(sessionId, { killed: false, killedName: null, killedId: null, aliveCount });
+    const winCheck = checkWinCondition(session);
+    if (winCheck) { endGame(sessionId, winCheck); return; }
+    setPhase(sessionId, GamePhase.MORNING);
+  }
 }
 
 // ============================================
-// Chat System (DISCUSSION + REBUTTAL)
+// Chat (Open/Close by Host)
 // ============================================
 
 export function sendChatMessage(playerId: string, text: string): { success: boolean; error?: string } {
   const sessionId = playerToSession.get(playerId);
   if (!sessionId) return { success: false, error: 'لست في جلسة' };
-
   const session = sessions.get(sessionId);
   if (!session) return { success: false, error: 'جلسة غير موجودة' };
-
-  if (session.phase !== GamePhase.DISCUSSION && session.phase !== GamePhase.REBUTTAL) {
-    return { success: false, error: 'ليس وقت النقاش' };
-  }
+  if (!session.chatOpen) return { success: false, error: 'الشات مغلق' };
 
   const player = session.players.find(p => p.id === playerId);
-  if (!player) return { success: false, error: 'غير موجود' };
-  if (!player.isAlive) return { success: false, error: 'أنت مُقصى' };
+  if (!player || !player.isAlive) return { success: false, error: 'غير مسموح' };
 
-  const currentCount = session.messageCount[playerId] || 0;
-  if (currentCount >= MAX_MESSAGES_PER_PHASE) {
-    return { success: false, error: 'أرسلت رسالتك بالفعل' };
-  }
+  const cleanText = text.trim();
+  if (!cleanText) return { success: false, error: 'رسالة فارغة' };
 
-  const cleanText = text.trim().slice(0, MAX_MESSAGE_LENGTH);
-  if (cleanText.length === 0) return { success: false, error: 'الرسالة فارغة' };
-
-  const message: ChatMessage = {
-    id: generateId(),
-    playerId: player.id,
-    playerName: player.name,
-    text: cleanText,
-    phase: session.phase === GamePhase.DISCUSSION ? 'DISCUSSION' : 'REBUTTAL',
-    timestamp: Date.now(),
-  };
-
+  const message: ChatMessage = { id: generateId(), playerId: player.id, playerName: player.name, text: cleanText, isHost: false, timestamp: Date.now() };
   session.messages.push(message);
-  session.messageCount[playerId] = currentCount + 1;
 
-  if (callbacks) {
-    callbacks.onChatMessage(sessionId, message);
-  }
+  if (callbacks) callbacks.onChatMessage(sessionId, message);
   return { success: true };
 }
 
 // ============================================
-// Voting System
+// Voting
 // ============================================
 
 export function castVote(playerId: string, targetId: string): { success: boolean; error?: string } {
   const sessionId = playerToSession.get(playerId);
   if (!sessionId) return { success: false, error: 'لست في جلسة' };
-
   const session = sessions.get(sessionId);
   if (!session) return { success: false, error: 'جلسة غير موجودة' };
-  if (session.phase !== GamePhase.VOTING) return { success: false, error: 'ليس وقت التصويت' };
+  if (!session.votingOpen) return { success: false, error: 'التصويت مغلق' };
 
-  const voter = session.players.find(p => p.id === playerId);
-  if (!voter) return { success: false, error: 'غير موجود' };
-  if (!voter.isAlive) return { success: false, error: 'أنت مُقصى' };
+  const voter = session.players.find(p => p.id === playerId && p.isAlive);
+  if (!voter) return { success: false, error: 'غير مسموح' };
 
-  const target = session.players.find(p => p.id === targetId);
-  if (!target) return { success: false, error: 'هدف غير موجود' };
-  if (!target.isAlive) return { success: false, error: 'لا يمكن التصويت لمُقصى' };
-  if (target.id === playerId) return { success: false, error: 'لا يمكن التصويت لنفسك' };
+  const target = session.players.find(p => p.id === targetId && p.isAlive && p.id !== playerId);
+  if (!target) return { success: false, error: 'هدف غير صالح' };
 
   session.votes[playerId] = targetId;
-
   const aliveVoters = session.players.filter(p => p.isAlive);
   const totalVotes = Object.keys(session.votes).length;
 
@@ -530,6 +614,14 @@ export function castVote(playerId: string, targetId: string): { success: boolean
       totalVotes, totalEligible: aliveVoters.length,
     });
   }
+
+  // Auto-resolve when everyone has voted
+  if (totalVotes >= aliveVoters.length) {
+    session.votingOpen = false;
+    if (callbacks) callbacks.onVotingState(sessionId, false);
+    resolveVotes(sessionId);
+  }
+
   return { success: true };
 }
 
@@ -537,29 +629,19 @@ function resolveVotes(sessionId: string): void {
   const session = sessions.get(sessionId);
   if (!session) return;
 
-  const voteEntries = Object.entries(session.votes);
   const countMap: Record<string, number> = {};
-  voteEntries.forEach(([_, targetId]) => {
-    countMap[targetId] = (countMap[targetId] || 0) + 1;
-  });
+  Object.values(session.votes).forEach(targetId => { countMap[targetId] = (countMap[targetId] || 0) + 1; });
 
   const voteCounts: VoteCount[] = Object.entries(countMap)
-    .map(([playerId, count]) => ({
-      playerId,
-      playerName: session.players.find(p => p.id === playerId)?.name || '???',
-      count,
-    }))
+    .map(([pid, count]) => ({ playerId: pid, playerName: session.players.find(p => p.id === pid)?.name || '???', count }))
     .sort((a, b) => b.count - a.count);
 
   const aliveCount = session.players.filter(p => p.isAlive).length;
 
   if (voteCounts.length === 0) {
-    const result: VoteResultData = {
-      eliminated: false, eliminatedId: null, eliminatedName: null,
-      isTie: false, voteCounts: [], aliveCount,
-    };
-    session.voteResult = result;
-    if (callbacks) callbacks.onVoteResult(sessionId, result);
+    const r: VoteResultData = { eliminated: false, eliminatedId: null, eliminatedName: null, isTie: false, voteCounts: [], aliveCount };
+    session.voteResult = r;
+    if (callbacks) callbacks.onVoteResult(sessionId, r);
     return;
   }
 
@@ -567,25 +649,25 @@ function resolveVotes(sessionId: string): void {
   const topVoted = voteCounts.filter(v => v.count === maxVotes);
 
   if (topVoted.length > 1) {
-    const result: VoteResultData = {
-      eliminated: false, eliminatedId: null, eliminatedName: null,
-      isTie: true, voteCounts, aliveCount,
-    };
-    session.voteResult = result;
-    if (callbacks) callbacks.onVoteResult(sessionId, result);
+    const r: VoteResultData = { eliminated: false, eliminatedId: null, eliminatedName: null, isTie: true, voteCounts, aliveCount };
+    session.voteResult = r;
+    if (callbacks) callbacks.onVoteResult(sessionId, r);
     return;
   }
 
   const eliminated = session.players.find(p => p.id === topVoted[0].playerId);
   if (eliminated) {
     eliminated.isAlive = false;
-    const newAliveCount = session.players.filter(p => p.isAlive).length;
-    const result: VoteResultData = {
-      eliminated: true, eliminatedId: eliminated.id, eliminatedName: eliminated.name,
-      isTie: false, voteCounts, aliveCount: newAliveCount,
-    };
-    session.voteResult = result;
-    if (callbacks) callbacks.onVoteResult(sessionId, result);
+    const newAlive = session.players.filter(p => p.isAlive).length;
+    const r: VoteResultData = { eliminated: true, eliminatedId: eliminated.id, eliminatedName: eliminated.name, isTie: false, voteCounts, aliveCount: newAlive };
+    session.voteResult = r;
+    if (callbacks) callbacks.onVoteResult(sessionId, r);
+
+    // Audio: random pistol for elimination
+    const pistols: Array<'pistol1' | 'pistol2' | 'pistol3'> = ['pistol1', 'pistol2', 'pistol3'];
+    const randomPistol = pistols[Math.floor(Math.random() * pistols.length)];
+    const pistolCue: AudioCuePayload = { type: 'duck_and_play', file: randomPistol, duckTo: 0.08 };
+    if (callbacks) callbacks.onAudioCue(sessionId, pistolCue);
   }
 }
 
@@ -596,7 +678,6 @@ function resolveVotes(sessionId: string): void {
 function checkWinCondition(session: GameSession): WinResult | null {
   const aliveMafia = session.players.filter(p => p.role === PlayerRole.MAFIA && p.isAlive).length;
   const aliveNonMafia = session.players.filter(p => p.role !== PlayerRole.MAFIA && p.isAlive).length;
-
   if (aliveMafia === 0) return WinResult.CITIZEN_WIN;
   if (aliveMafia >= aliveNonMafia) return WinResult.MAFIA_WIN;
   return null;
@@ -605,10 +686,6 @@ function checkWinCondition(session: GameSession): WinResult | null {
 function endGame(sessionId: string, result: WinResult): void {
   const session = sessions.get(sessionId);
   if (!session) return;
-
-  const timer = sessionTimers.get(sessionId);
-  if (timer) { timer.stop(); sessionTimers.delete(sessionId); }
-
   session.isGameOver = true;
   session.winResult = result;
   session.phase = GamePhase.GAME_OVER;
@@ -623,111 +700,12 @@ function endGame(sessionId: string, result: WinResult): void {
 }
 
 // ============================================
-// State Machine
-// ============================================
-
-function transitionToPhase(sessionId: string, phase: GamePhase): void {
-  const session = sessions.get(sessionId);
-  if (!session || session.isGameOver) return;
-
-  const duration = PHASE_DURATIONS[phase];
-  const now = Date.now();
-
-  session.phase = phase;
-  session.phaseStartedAt = now;
-  session.phaseEndsAt = now + (duration * 1000);
-
-  if (phase === GamePhase.NIGHT) {
-    // حفظ lastDoctorProtect قبل التصفير
-    const lastProtect = session.nightActions.lastDoctorProtect;
-    session.nightActions = emptyNightActions();
-    session.nightActions.lastDoctorProtect = lastProtect;
-    session.voteResult = null;
-    session.wasSaved = false;
-    session.mafiaMessages = [];
-    session.mafiaMsgCount = {};
-  }
-  if (phase === GamePhase.DISCUSSION) {
-    session.messages = [];
-    session.messageCount = {};
-  }
-  if (phase === GamePhase.REBUTTAL) {
-    session.messageCount = {};
-  }
-  if (phase === GamePhase.VOTING) {
-    session.votes = {};
-    session.voteResult = null;
-  }
-
-  const info = PHASE_INFO[phase];
-  console.log(`${info.icon} [${session.code}] → ${info.name} (${duration}s) R${session.round}`);
-
-  if (callbacks) {
-    callbacks.onPhaseChange(sessionId, { phase, round: session.round, duration, info });
-    callbacks.onSessionUpdated(sessionId, session);
-  }
-
-  startPhaseTimer(sessionId, phase, duration);
-}
-
-function startPhaseTimer(sessionId: string, phase: GamePhase, duration: number): void {
-  const existingTimer = sessionTimers.get(sessionId);
-  if (existingTimer) existingTimer.stop();
-
-  const timer = new PhaseTimer(
-    (remaining, total) => {
-      if (callbacks) callbacks.onTimerTick(sessionId, { remaining, total, phase });
-    },
-    () => { onPhaseComplete(sessionId); }
-  );
-
-  sessionTimers.set(sessionId, timer);
-  timer.start(duration);
-}
-
-function onPhaseComplete(sessionId: string): void {
-  const session = sessions.get(sessionId);
-  if (!session || session.isGameOver) return;
-
-  switch (session.phase) {
-    case GamePhase.NIGHT:
-      executeNightKill(sessionId);
-      break;
-    case GamePhase.MORNING:
-      transitionToPhase(sessionId, GamePhase.DISCUSSION);
-      break;
-    case GamePhase.DISCUSSION:
-      transitionToPhase(sessionId, GamePhase.REBUTTAL);
-      break;
-    case GamePhase.REBUTTAL:
-      transitionToPhase(sessionId, GamePhase.VOTING);
-      break;
-    case GamePhase.VOTING:
-      resolveVotes(sessionId);
-      {
-        const winCheck = checkWinCondition(session);
-        if (winCheck) {
-          endGame(sessionId, winCheck);
-        } else {
-          transitionToPhase(sessionId, GamePhase.RESULT);
-        }
-      }
-      break;
-    case GamePhase.RESULT:
-      session.round++;
-      transitionToPhase(sessionId, GamePhase.NIGHT);
-      break;
-  }
-}
-
-// ============================================
 // Public Helpers
 // ============================================
 
 export function getSessionByPlayer(playerId: string): GameSession | null {
   const sessionId = playerToSession.get(playerId);
-  if (!sessionId) return null;
-  return sessions.get(sessionId) || null;
+  return sessionId ? sessions.get(sessionId) || null : null;
 }
 
 export function getSessionIdByPlayer(playerId: string): string | null {
@@ -740,6 +718,7 @@ export function getAliveMafiaIds(sessionId: string): string[] {
   return session.players.filter(p => p.role === PlayerRole.MAFIA && p.isAlive).map(p => p.id);
 }
 
-export function getActiveSessions(): number {
-  return sessions.size;
+export function getHostId(sessionId: string): string | null {
+  const session = sessions.get(sessionId);
+  return session ? session.hostId : null;
 }

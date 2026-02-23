@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import BackgroundMusic from '@/components/BackgroundMusic';
 
 export const metadata: Metadata = {
   title: 'Doubt - لعبة الشك',
@@ -16,7 +15,6 @@ export default function RootLayout({
     <html lang="ar" dir="rtl">
       <body className="min-h-screen">
         {children}
-        <BackgroundMusic />
       </body>
     </html>
   );

@@ -6,7 +6,7 @@
     "dev": "next dev",
     "server": "npx ts-node --project tsconfig.server.json src/server/index.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run server\"",
-    "build": "npx tsc --project tsconfig.server.json && next build",
+    "build": "rm -rf dist .next && npx tsc --project tsconfig.server.json && next build",
     "start": "node server.js",
     "start:prod": "node server.js",
     "lint": "next lint"

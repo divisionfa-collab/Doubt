@@ -1,18 +1,13 @@
 // ============================================
 // Doubt Game - Core Types
-// Sprint 6: Advanced Night System
+// EO-01: UX Core Reset - Host-Managed Game
 // ============================================
 
-/**
- * حالات اللعبة
- * NIGHT → MORNING → DISCUSSION → REBUTTAL → VOTING → RESULT → NIGHT...
- */
 export enum GamePhase {
   LOBBY      = 'LOBBY',
   NIGHT      = 'NIGHT',
   MORNING    = 'MORNING',
   DISCUSSION = 'DISCUSSION',
-  REBUTTAL   = 'REBUTTAL',
   VOTING     = 'VOTING',
   RESULT     = 'RESULT',
   GAME_OVER  = 'GAME_OVER',
@@ -25,68 +20,36 @@ export enum PlayerRole {
   DETECTIVE = 'DETECTIVE',
 }
 
-export const PHASE_ORDER: GamePhase[] = [
-  GamePhase.NIGHT,
-  GamePhase.MORNING,
-  GamePhase.DISCUSSION,
-  GamePhase.REBUTTAL,
-  GamePhase.VOTING,
-  GamePhase.RESULT,
-];
-
-export const PHASE_DURATIONS: Record<GamePhase, number> = {
-  [GamePhase.LOBBY]:      0,
-  [GamePhase.NIGHT]:      20,   // زيادة 5 ثواني (3 أدوار تختار)
-  [GamePhase.MORNING]:    6,
-  [GamePhase.DISCUSSION]: 30,
-  [GamePhase.REBUTTAL]:   20,
-  [GamePhase.VOTING]:     15,
-  [GamePhase.RESULT]:     6,
-  [GamePhase.GAME_OVER]:  0,
+export const PHASE_INFO: Record<GamePhase, { name: string; description: string; icon: string }> = {
+  [GamePhase.LOBBY]:      { name: 'الانتظار',    description: 'في انتظار اللاعبين...',  icon: '🏠' },
+  [GamePhase.NIGHT]:      { name: 'الليل',       description: 'المدينة نائمة...',       icon: '🌙' },
+  [GamePhase.MORNING]:    { name: 'الصباح',      description: 'المدينة تستيقظ...',       icon: '🌅' },
+  [GamePhase.DISCUSSION]: { name: 'النقاش',      description: 'ناقشوا!',                icon: '💬' },
+  [GamePhase.VOTING]:     { name: 'التصويت',     description: 'صوّتوا لطرد المشبوه!',    icon: '🗳️' },
+  [GamePhase.RESULT]:     { name: 'النتيجة',     description: 'نتيجة التصويت...',        icon: '📊' },
+  [GamePhase.GAME_OVER]:  { name: 'انتهت اللعبة', description: '',                       icon: '🏁' },
 };
-
-export const MAX_MESSAGES_PER_PHASE = 1;
-export const MAX_MESSAGE_LENGTH = 110;
 
 /** حد رسائل قناة المافيا السرية */
 export const MAX_MAFIA_CHAT_LENGTH = 60;
-export const MAX_MAFIA_MESSAGES = 2;
-
-export const PHASE_INFO: Record<GamePhase, { name: string; description: string; icon: string }> = {
-  [GamePhase.LOBBY]:      { name: 'الانتظار',    description: 'في انتظار اللاعبين...',           icon: '🏠' },
-  [GamePhase.NIGHT]:      { name: 'الليل',       description: 'المدينة نائمة...',                icon: '🌙' },
-  [GamePhase.MORNING]:    { name: 'الصباح',      description: 'المدينة تستيقظ...',                icon: '🌅' },
-  [GamePhase.DISCUSSION]: { name: 'النقاش',      description: 'اطرح موقفك! (رسالة واحدة)',        icon: '💬' },
-  [GamePhase.REBUTTAL]:   { name: 'الرد',        description: 'ردّ على ما قيل! (رسالة واحدة)',    icon: '🔄' },
-  [GamePhase.VOTING]:     { name: 'التصويت',     description: 'صوّتوا لطرد المشبوه!',             icon: '🗳️' },
-  [GamePhase.RESULT]:     { name: 'النتيجة',     description: 'نتيجة التصويت...',                 icon: '📊' },
-  [GamePhase.GAME_OVER]:  { name: 'انتهت اللعبة', description: '',                                icon: '🏁' },
-};
+export const MAX_MAFIA_MESSAGES = 3;
 
 /**
- * توزيع الأدوار حسب عدد اللاعبين
- * 2-3: 1 مافيا + مدنيين
- * 4-5: 1 مافيا + 1 محقق + مدنيين
- * 6+:  2 مافيا + 1 محقق + 1 طبيب + مدنيين
+ * توزيع الأدوار:
+ * < 10 لاعبين: 1 مافيا
+ * >= 10 لاعبين: 2 مافيا
+ * >= 4: + محقق
+ * >= 6: + طبيب
  */
 export function getRoleDistribution(playerCount: number): PlayerRole[] {
-  if (playerCount <= 3) {
-    return [PlayerRole.MAFIA, ...Array(playerCount - 1).fill(PlayerRole.CITIZEN)];
-  }
-  if (playerCount <= 5) {
-    return [
-      PlayerRole.MAFIA,
-      PlayerRole.DETECTIVE,
-      ...Array(playerCount - 2).fill(PlayerRole.CITIZEN),
-    ];
-  }
-  // 6+
-  return [
-    PlayerRole.MAFIA, PlayerRole.MAFIA,
-    PlayerRole.DETECTIVE,
-    PlayerRole.DOCTOR,
-    ...Array(playerCount - 4).fill(PlayerRole.CITIZEN),
-  ];
+  const mafiaCount = playerCount >= 10 ? 2 : 1;
+  const roles: PlayerRole[] = Array(mafiaCount).fill(PlayerRole.MAFIA);
+
+  if (playerCount >= 6) roles.push(PlayerRole.DOCTOR);
+  if (playerCount >= 4) roles.push(PlayerRole.DETECTIVE);
+
+  while (roles.length < playerCount) roles.push(PlayerRole.CITIZEN);
+  return roles;
 }
 
 // ============================================
@@ -98,7 +61,6 @@ export interface Player {
   name: string;
   role: PlayerRole | null;
   isAlive: boolean;
-  isHost: boolean;
   isConnected: boolean;
   joinedAt: number;
 }
@@ -113,11 +75,10 @@ export interface ChatMessage {
   playerId: string;
   playerName: string;
   text: string;
-  phase: 'DISCUSSION' | 'REBUTTAL';
+  isHost: boolean;
   timestamp: number;
 }
 
-/** رسالة القناة السرية للمافيا */
 export interface MafiaChatMessage {
   id: string;
   playerId: string;
@@ -126,46 +87,54 @@ export interface MafiaChatMessage {
   timestamp: number;
 }
 
-/** أفعال الليل */
 export interface NightActions {
-  mafiaTarget: string | null;       // من تريد المافيا قتله
-  doctorProtect: string | null;     // من يحمي الطبيب
-  detectiveCheck: string | null;    // من يفحص المحقق
-  lastDoctorProtect: string | null; // من حماه الطبيب الليلة الماضية (منع التكرار)
+  mafiaTarget: string | null;
+  doctorProtect: string | null;
+  detectiveCheck: string | null;
+  lastDoctorProtect: string | null;
 }
 
-/** نتيجة فحص المحقق */
 export interface DetectiveResult {
   targetId: string;
   targetName: string;
   isMafia: boolean;
 }
 
+/** حالة جاهزية الليل للـ Host فقط (بدون تفاصيل) */
+export interface NightReadiness {
+  mafiaReady: boolean;
+  doctorReady: boolean;
+  detectiveReady: boolean;
+  hasMafia: boolean;
+  hasDoctor: boolean;
+  hasDetective: boolean;
+  allReady: boolean;
+}
+
 export interface GameSession {
   id: string;
   code: string;
-  players: Player[];
+  hostId: string;                  // Host socket ID - لا يلعب
+  players: Player[];               // اللاعبون فقط (بدون Host)
   phase: GamePhase;
   round: number;
-  phaseStartedAt: number;
-  phaseEndsAt: number;
   isStarted: boolean;
   isGameOver: boolean;
   winResult: WinResult | null;
-  // Night Actions (Sprint 6)
+  // Night
   nightActions: NightActions;
   lastKilled: string | null;
   lastKilledName: string | null;
-  wasSaved: boolean;               // هل تم إنقاذ الهدف؟
-  // Mafia Chat (Sprint 6)
+  // Chat - مفتوح/مغلق بتحكم Host
+  chatOpen: boolean;
+  messages: ChatMessage[];
+  // Mafia Chat
   mafiaMessages: MafiaChatMessage[];
   mafiaMsgCount: Record<string, number>;
   // Voting
+  votingOpen: boolean;
   votes: Record<string, string>;
   voteResult: VoteResultData | null;
-  // Discussion
-  messages: ChatMessage[];
-  messageCount: Record<string, number>;
   createdAt: number;
 }
 
@@ -174,9 +143,19 @@ export interface GameSession {
 // ============================================
 
 export interface ClientToServerEvents {
-  'session:create': (playerName: string, callback: (response: SessionResponse) => void) => void;
+  // Session
+  'session:create': (callback: (response: SessionResponse) => void) => void;
   'session:join': (code: string, playerName: string, callback: (response: SessionResponse) => void) => void;
-  'game:start': (callback: (response: BaseResponse) => void) => void;
+  // Host commands
+  'host:start_game': (callback: (response: BaseResponse) => void) => void;
+  'host:set_phase': (phase: string, callback: (response: BaseResponse) => void) => void;
+  'host:open_chat': (callback: (response: BaseResponse) => void) => void;
+  'host:close_chat': (callback: (response: BaseResponse) => void) => void;
+  'host:open_voting': (callback: (response: BaseResponse) => void) => void;
+  'host:close_voting': (callback: (response: BaseResponse) => void) => void;
+  'host:resolve_night': (callback: (response: BaseResponse) => void) => void;
+  'host:send_prompt': (text: string, callback: (response: BaseResponse) => void) => void;
+  // Player actions
   'night:select_target': (targetId: string, callback: (response: BaseResponse) => void) => void;
   'night:doctor_protect': (targetId: string, callback: (response: BaseResponse) => void) => void;
   'night:detective_check': (targetId: string, callback: (response: BaseResponse) => void) => void;
@@ -188,20 +167,23 @@ export interface ClientToServerEvents {
 export interface ServerToClientEvents {
   'session:updated': (session: GameSession) => void;
   'phase:changed': (data: PhaseChangeData) => void;
-  'timer:tick': (data: TimerData) => void;
   'player:joined': (player: Player) => void;
   'player:left': (playerId: string) => void;
   'role:assigned': (data: RoleAssignment) => void;
   'night:target_selected': (data: NightTargetData) => void;
   'night:doctor_selected': (data: { targetName: string }) => void;
   'night:detective_selected': (data: { targetName: string }) => void;
+  'night:readiness': (data: NightReadiness) => void;
   'morning:kill_result': (data: MorningResult) => void;
   'detective:result': (data: DetectiveResult) => void;
   'mafia:message': (message: MafiaChatMessage) => void;
   'vote:update': (data: VoteUpdateData) => void;
   'vote:result': (data: VoteResultData) => void;
   'chat:message': (message: ChatMessage) => void;
+  'chat:state': (data: { open: boolean }) => void;
+  'voting:state': (data: { open: boolean }) => void;
   'game:over': (data: GameOverData) => void;
+  'audio:cue': (data: AudioCuePayload) => void;
   'error': (message: string) => void;
 }
 
@@ -224,7 +206,6 @@ export interface MorningResult {
   killed: boolean;
   killedName: string | null;
   killedId: string | null;
-  wasSaved: boolean;
   aliveCount: number;
 }
 
@@ -259,14 +240,7 @@ export interface GameOverData {
 export interface PhaseChangeData {
   phase: GamePhase;
   round: number;
-  duration: number;
   info: { name: string; description: string; icon: string };
-}
-
-export interface TimerData {
-  remaining: number;
-  total: number;
-  phase: GamePhase;
 }
 
 export interface BaseResponse {
@@ -274,7 +248,16 @@ export interface BaseResponse {
   error?: string;
 }
 
+/** Audio cue from server */
+export interface AudioCuePayload {
+  type: 'duck_and_play' | 'play_only' | 'duck' | 'restore';
+  file?: string;
+  duckTo?: number;
+  delayMs?: number;
+}
+
 export interface SessionResponse extends BaseResponse {
   session?: GameSession;
   playerId?: string;
+  isHost?: boolean;
 }
