@@ -249,7 +249,7 @@ export function useSocket() {
       audioDirector.playBackground();
     }, []),
     toggleMute: useCallback(() => audioDirector.toggleMute(), []),
-    startAmbient: useCallback((key: string, vol?: number) => audioDirector.startAmbient(key as any, vol), []),
+    startAmbient: useCallback((key: string, vol?: number, fade?: number) => audioDirector.startAmbient(key as any, vol, fade), []),
     stopAmbient: useCallback((fade?: number) => audioDirector.stopAmbient(fade), []),
     hostStartGame: useCallback(() => emitCb('host:start_game'), [emitCb]),
     hostSetPhase: useCallback((p: string) => emitCb('host:set_phase', p), [emitCb]),
