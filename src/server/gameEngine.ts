@@ -23,6 +23,8 @@ import {
   VoteUpdateData,
   VoteResultData,
   VoteCount,
+  PostGameStartData,
+  PostGameUpdateData,
   PHASE_INFO,
   MAX_MAFIA_CHAT_LENGTH,
   MAX_MAFIA_MESSAGES,
@@ -63,7 +65,45 @@ function emptyNightActions(): NightActions {
 
 const sessions: Map<string, GameSession> = new Map();
 const codeToSessionId: Map<string, string> = new Map();
-const playerToSession: Map<string, string> = new Map();
+const playerToSession: Map<string, string> = new Map();  // playerId (UUID) → sessionId
+const socketToPlayer: Map<string, string> = new Map();   // socketId → playerId (UUID)
+const playerToSocket: Map<string, string> = new Map();   // playerId (UUID) → socketId
+// Resolve socketId to playerId (UUID)
+export function resolvePlayerId(socketId: string): string | null {
+  return socketToPlayer.get(socketId) || null;
+}
+
+// Resolve playerId to socketId
+export function resolveSocketId(playerId: string): string | null {
+  return playerToSocket.get(playerId) || null;
+}
+
+// Map socket to player (bidirectional) — cleans old mapping first
+export function mapSocket(socketId: string, playerId: string): void {
+  // Clean old socket for this player (if any)
+  const oldSocket = playerToSocket.get(playerId);
+  if (oldSocket && oldSocket !== socketId) {
+    socketToPlayer.delete(oldSocket);
+  }
+  // Clean old player for this socket (if any)
+  const oldPlayer = socketToPlayer.get(socketId);
+  if (oldPlayer && oldPlayer !== playerId) {
+    playerToSocket.delete(oldPlayer);
+  }
+  socketToPlayer.set(socketId, playerId);
+  playerToSocket.set(playerId, socketId);
+}
+
+// Unmap socket
+export function unmapSocket(socketId: string): string | null {
+  const playerId = socketToPlayer.get(socketId) || null;
+  if (playerId) {
+    socketToPlayer.delete(socketId);
+    playerToSocket.delete(playerId);
+  }
+  return playerId;
+}
+
 
 // ============================================
 // Callbacks
@@ -87,6 +127,9 @@ interface EngineCallbacks {
   onVotingState: (sessionId: string, open: boolean) => void;
   onGameOver: (sessionId: string, data: GameOverData) => void;
   onAudioCue: (sessionId: string, cue: AudioCuePayload) => void;
+  onPostGameStart: (sessionId: string, data: PostGameStartData) => void;
+  onPostGameUpdate: (sessionId: string, data: PostGameUpdateData) => void;
+  onPlayerLeft: (sessionId: string, playerId: string) => void;
 }
 
 let callbacks: EngineCallbacks | null = null;
@@ -99,13 +142,13 @@ export function setCallbacks(cb: EngineCallbacks): void {
 // Session Management
 // ============================================
 
-export function createSession(hostId: string): { session: GameSession } {
+export function createSession(hostPlayerId: string, socketId: string): { session: GameSession } {
   const sessionId = generateId();
   let code = generateCode();
   while (codeToSessionId.has(code)) code = generateCode();
 
   const session: GameSession = {
-    id: sessionId, code, hostId,
+    id: sessionId, code, hostId: hostPlayerId,
     players: [],
     phase: GamePhase.LOBBY, round: 0,
     isStarted: false, isGameOver: false, winResult: null,
@@ -114,34 +157,164 @@ export function createSession(hostId: string): { session: GameSession } {
     chatOpen: false, messages: [],
     mafiaMessages: [], mafiaMsgCount: {},
     votingOpen: false, votes: {}, voteResult: null,
+    postGameResponses: {}, postGameDeadline: null,
+    hostDisconnectedAt: null,
     createdAt: Date.now(),
   };
 
   sessions.set(sessionId, session);
   codeToSessionId.set(code, sessionId);
-  playerToSession.set(hostId, sessionId);
-  console.log(`🎮 Session created: ${code} (host: ${hostId})`);
+  playerToSession.set(hostPlayerId, sessionId);
+  mapSocket(socketId, hostPlayerId);
+  console.log(`🎮 Session created: ${code} (host: ${hostPlayerId}, socket: ${socketId})`);
   return { session };
 }
 
-export function joinSession(code: string, playerName: string, playerId: string): { session: GameSession; player: Player } | { error: string } {
+// ============================================
+// Grace Period Cleanup (runs every second)
+// ============================================
+
+const GRACE_PERIOD_MS = 15000; // 15 seconds
+const HOST_GRACE_PERIOD_MS = 20000; // 20 seconds for host
+
+export function startGraceCleanupLoop(): void {
+  setInterval(() => {
+    sessions.forEach((session, sessionId) => {
+      // Check host grace period (20s for host)
+      if (session.hostDisconnectedAt) {
+        if (Date.now() - session.hostDisconnectedAt > HOST_GRACE_PERIOD_MS) {
+          console.log(`🗑️ [${session.code}] Host gone after grace period — destroying session`);
+          destroySession(sessionId);
+          return; // session destroyed, skip player checks
+        }
+      }
+
+      // Check player grace periods (15s)
+      const toRemove: string[] = [];
+      session.players.forEach(player => {
+        if (!player.isConnected && player.disconnectedAt) {
+          if (Date.now() - player.disconnectedAt > GRACE_PERIOD_MS) {
+            toRemove.push(player.id);
+          }
+        }
+      });
+
+      toRemove.forEach(pid => {
+        removePlayerFully(sessionId, pid);
+      });
+    });
+  }, 1000);
+}
+
+function removePlayerFully(sessionId: string, playerId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+
+  const player = session.players.find(p => p.id === playerId);
+  const playerName = player?.name || '?';
+
+  // Clean maps
+  playerToSession.delete(playerId);
+  const sock = playerToSocket.get(playerId);
+  if (sock) { socketToPlayer.delete(sock); playerToSocket.delete(playerId); }
+
+  // Remove from session
+  session.players = session.players.filter(p => p.id !== playerId);
+  console.log(`🗑️ [${session.code}] ${playerName} removed after grace period (${session.players.length} left)`);
+
+  // Broadcast player:left + session update
+  if (callbacks) {
+    callbacks.onPlayerLeft(sessionId, playerId);
+    callbacks.onSessionUpdated(sessionId, session);
+  }
+
+  // Check win condition if game is running
+  if (session.isStarted && !session.isGameOver) {
+    const winCheck = checkWinCondition(session);
+    if (winCheck) endGame(sessionId, winCheck);
+  }
+
+  // If no players left, destroy
+  if (session.players.length === 0) {
+    destroySession(sessionId);
+  }
+}
+export function markPlayerDisconnected(playerId: string): void {
+  const sessionId = playerToSession.get(playerId);
+  if (!sessionId) return;
+  const session = sessions.get(sessionId);
+  if (!session) return;
+
+  // Host disconnect — mark with timestamp for grace period
+  if (playerId === session.hostId) {
+    session.hostDisconnectedAt = Date.now();
+    console.log(`⚠️ [${session.code}] Host disconnected (grace: 20s)`);
+    return;
+  }
+
+  const player = session.players.find(p => p.id === playerId);
+  if (!player) return;
+
+  player.isConnected = false;
+  player.disconnectedAt = Date.now();
+  console.log(`⚠️ [${session.code}] ${player.name} disconnected (grace: 15s)`);
+
+  // Broadcast updated session (shows disconnected badge)
+  if (callbacks) {
+    callbacks.onSessionUpdated(sessionId, session);
+  }
+}
+export function reconnectHost(hostPlayerId: string, socketId: string): { session: GameSession } | null {
+  const sessionId = playerToSession.get(hostPlayerId);
+  if (!sessionId) return null;
+  const session = sessions.get(sessionId);
+  if (!session) return null;
+  if (session.hostId !== hostPlayerId) return null;
+
+  // Update socket mapping & clear disconnect timestamp
+  mapSocket(socketId, hostPlayerId);
+  session.hostDisconnectedAt = null;
+  console.log(`🔄 Host reconnected (pid: ${hostPlayerId}, socket: ${socketId})`);
+  return { session };
+}
+export function joinSession(code: string, playerName: string, playerId: string, socketId: string): { session: GameSession; player: Player; reconnected?: boolean } | { error: string } {
   const sessionId = codeToSessionId.get(code.toUpperCase());
   if (!sessionId) return { error: 'كود الجلسة غير صحيح' };
 
   const session = sessions.get(sessionId);
   if (!session) return { error: 'الجلسة غير موجودة' };
+
+  // === RECONNECT: same UUID exists in session ===
+  const existing = session.players.find(p => p.id === playerId);
+  if (existing) {
+    // Force replace old connection (same player, new socket)
+    const oldSocketId = existing.socketId;
+    unmapSocket(oldSocketId);
+
+    existing.socketId = socketId;
+    existing.isConnected = true;
+    existing.disconnectedAt = null;
+    mapSocket(socketId, playerId);
+    console.log(`🔄 ${existing.name} reconnected to ${code} (pid: ${playerId})`);
+    return { session, player: existing, reconnected: true };
+  }
+
+  // === NEW PLAYER ===
   if (session.isStarted && !session.isGameOver) return { error: 'اللعبة جارية' };
   if (session.players.length >= 20) return { error: 'الجلسة ممتلئة' };
   if (session.players.some(p => p.name === playerName)) return { error: 'الاسم مستخدم' };
 
   const player: Player = {
-    id: playerId, name: playerName, role: null,
-    isAlive: true, isConnected: true, joinedAt: Date.now(),
+    id: playerId, socketId,
+    name: playerName, role: null,
+    isAlive: true, isConnected: true,
+    disconnectedAt: null, joinedAt: Date.now(),
   };
 
   session.players.push(player);
   playerToSession.set(playerId, sessionId);
-  console.log(`👤 ${playerName} joined ${code} (${session.players.length} players)`);
+  mapSocket(socketId, playerId);
+  console.log(`👤 ${playerName} joined ${code} (${session.players.length} players, pid: ${playerId})`);
   return { session, player };
 }
 
@@ -173,8 +346,16 @@ function destroySession(sessionId: string): void {
   const session = sessions.get(sessionId);
   if (!session) return;
   codeToSessionId.delete(session.code);
+  // Clean host
   playerToSession.delete(session.hostId);
-  session.players.forEach(p => playerToSession.delete(p.id));
+  const hostSock = playerToSocket.get(session.hostId);
+  if (hostSock) { socketToPlayer.delete(hostSock); playerToSocket.delete(session.hostId); }
+  // Clean players
+  session.players.forEach(p => {
+    playerToSession.delete(p.id);
+    const sock = playerToSocket.get(p.id);
+    if (sock) { socketToPlayer.delete(sock); playerToSocket.delete(p.id); }
+  });
   sessions.delete(sessionId);
 }
 
@@ -323,31 +504,33 @@ export function hostRestartGame(hostId: string): { success: boolean; error?: str
   if ('error' in result) return { success: false, error: result.error };
   const { session, sessionId } = result;
 
-  if (!session.isGameOver) return { success: false, error: 'اللعبة لم تنتهِ بعد' };
+  if (!session.isGameOver && session.phase !== GamePhase.GAME_OVER) return { success: false, error: 'اللعبة لم تنتهِ بعد' };
 
-  session.isStarted = false;
-  session.isGameOver = false;
-  session.winResult = null;
-  session.phase = GamePhase.LOBBY;
-  session.round = 0;
-  session.players.forEach(p => { p.isAlive = true; p.role = null; });
-  session.messages = [];
-  session.mafiaMessages = [];
-  session.mafiaMsgCount = {};
-  session.votes = {};
-  session.voteResult = null;
-  session.nightActions = emptyNightActions();
-  session.lastKilled = null;
-  session.lastKilledName = null;
-  session.chatOpen = false;
-  session.votingOpen = false;
+  // Enter POST_GAME phase
+  const duration = 20; // seconds
+  session.phase = GamePhase.POST_GAME;
+  session.postGameResponses = {};
+  session.postGameDeadline = Date.now() + duration * 1000;
 
-  console.log(`🔄 [${session.code}] Game reset to lobby (${session.players.length} players)`);
+  const winnerStr = session.winResult === 'MAFIA_WIN' ? 'MAFIA' : 'CITIZENS';
+  const winnerName = session.winResult === 'MAFIA_WIN' ? '🔪 المافيا' : '🏘️ المدنيون';
+
+  console.log(`🎬 [${session.code}] POST_GAME started (${duration}s)`);
 
   if (callbacks) {
-    callbacks.onPhaseChange(sessionId, { phase: GamePhase.LOBBY, round: 0, info: PHASE_INFO[GamePhase.LOBBY] });
+    callbacks.onPhaseChange(sessionId, { phase: GamePhase.POST_GAME, round: session.round, info: PHASE_INFO[GamePhase.POST_GAME] });
+    callbacks.onPostGameStart(sessionId, {
+      winner: winnerStr as 'MAFIA' | 'CITIZENS',
+      winnerName,
+      deadline: session.postGameDeadline,
+      duration,
+    });
     callbacks.onSessionUpdated(sessionId, session);
   }
+
+  // Server-authoritative timer: auto-resolve after deadline
+  setTimeout(() => resolvePostGame(sessionId), duration * 1000);
+
   return { success: true };
 }
 
@@ -781,4 +964,113 @@ export function getAliveMafiaIds(sessionId: string): string[] {
 export function getHostId(sessionId: string): string | null {
   const session = sessions.get(sessionId);
   return session ? session.hostId : null;
+}
+
+// ============================================
+// Post-Game Continue/Exit System
+// ============================================
+
+export function postGameRespond(playerId: string, choice: 'continue' | 'exit'): { success: boolean; error?: string } {
+  const sessionId = playerToSession.get(playerId);
+  if (!sessionId) return { success: false, error: 'لست في جلسة' };
+  const session = sessions.get(sessionId);
+  if (!session) return { success: false, error: 'جلسة غير موجودة' };
+  if (session.phase !== GamePhase.POST_GAME) return { success: false, error: 'ليست مرحلة ما بعد اللعبة' };
+  if (session.postGameResponses[playerId]) return { success: false, error: 'تم تسجيل اختيارك مسبقاً' };
+
+  session.postGameResponses[playerId] = choice;
+  console.log(`🎬 [${session.code}] ${session.players.find(p => p.id === playerId)?.name} chose: ${choice}`);
+
+  // Broadcast update
+  if (callbacks) {
+    const update = getPostGameUpdate(session);
+    callbacks.onPostGameUpdate(sessionId, update);
+  }
+
+  // If all responded, resolve immediately
+  if (Object.keys(session.postGameResponses).length >= session.players.length) {
+    resolvePostGame(sessionId);
+  }
+
+  return { success: true };
+}
+
+function getPostGameUpdate(session: GameSession): PostGameUpdateData {
+  const responses = session.postGameResponses;
+  const continueCount = Object.values(responses).filter(v => v === 'continue').length;
+  const exitCount = Object.values(responses).filter(v => v === 'exit').length;
+  return {
+    responses,
+    continueCount,
+    exitCount,
+    totalPlayers: session.players.length,
+    deadline: session.postGameDeadline || 0,
+  };
+}
+
+function resolvePostGame(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session || session.phase !== GamePhase.POST_GAME) return;
+
+  // Anyone who didn't respond OR is disconnected = exit
+  session.players.forEach(p => {
+    if (!session.postGameResponses[p.id] || !p.isConnected) {
+      session.postGameResponses[p.id] = 'exit';
+    }
+  });
+
+  // Remove exiters
+  const exiters = session.players.filter(p => session.postGameResponses[p.id] === 'exit');
+  exiters.forEach(p => {
+    playerToSession.delete(p.id);
+    // Clean up socket maps
+    const sid = playerToSocket.get(p.id);
+    if (sid) { socketToPlayer.delete(sid); playerToSocket.delete(p.id); }
+    console.log(`❌ [${session.code}] ${p.name} exited post-game`);
+  });
+
+  session.players = session.players.filter(p => session.postGameResponses[p.id] === 'continue');
+
+  // Reset session
+  session.isStarted = false;
+  session.isGameOver = false;
+  session.winResult = null;
+  session.round = 0;
+  session.players.forEach(p => { p.isAlive = true; p.role = null; });
+  session.messages = [];
+  session.mafiaMessages = [];
+  session.mafiaMsgCount = {};
+  session.votes = {};
+  session.voteResult = null;
+  session.nightActions = emptyNightActions();
+  session.lastKilled = null;
+  session.lastKilledName = null;
+  session.chatOpen = false;
+  session.votingOpen = false;
+  session.postGameResponses = {};
+  session.postGameDeadline = null;
+
+  if (session.players.length >= 2) {
+    session.phase = GamePhase.LOBBY;
+    console.log(`🔄 [${session.code}] Back to LOBBY with ${session.players.length} players`);
+  } else {
+    session.phase = GamePhase.LOBBY;
+    console.log(`⚠️ [${session.code}] Too few players (${session.players.length}), back to LOBBY`);
+  }
+
+  if (callbacks) {
+    callbacks.onPhaseChange(sessionId, { phase: GamePhase.LOBBY, round: 0, info: PHASE_INFO[GamePhase.LOBBY] });
+    callbacks.onSessionUpdated(sessionId, session);
+  }
+}
+
+export function hostStartNewRound(hostId: string): { success: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  if (session.phase !== GamePhase.POST_GAME) return { success: false, error: 'ليست مرحلة ما بعد اللعبة' };
+
+  resolvePostGame(sessionId);
+  return { success: true };
 }

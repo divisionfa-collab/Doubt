@@ -11,6 +11,7 @@ export enum GamePhase {
   VOTING     = 'VOTING',
   RESULT     = 'RESULT',
   GAME_OVER  = 'GAME_OVER',
+  POST_GAME  = 'POST_GAME',
 }
 
 export enum PlayerRole {
@@ -28,6 +29,7 @@ export const PHASE_INFO: Record<GamePhase, { name: string; description: string; 
   [GamePhase.VOTING]:     { name: 'التصويت',     description: 'صوّتوا لطرد المشبوه!',    icon: '🗳️' },
   [GamePhase.RESULT]:     { name: 'النتيجة',     description: 'نتيجة التصويت...',        icon: '📊' },
   [GamePhase.GAME_OVER]:  { name: 'انتهت اللعبة', description: '',                       icon: '🏁' },
+  [GamePhase.POST_GAME]:  { name: 'بين الجولات',  description: 'هل تستمر؟',              icon: '🎬' },
 };
 
 /** حد رسائل قناة المافيا السرية */
@@ -57,11 +59,13 @@ export function getRoleDistribution(playerCount: number): PlayerRole[] {
 // ============================================
 
 export interface Player {
-  id: string;
+  id: string;           // UUID ثابت (من localStorage)
+  socketId: string;     // socket.id متغير
   name: string;
   role: PlayerRole | null;
   isAlive: boolean;
   isConnected: boolean;
+  disconnectedAt: number | null;
   joinedAt: number;
 }
 
@@ -135,6 +139,10 @@ export interface GameSession {
   votingOpen: boolean;
   votes: Record<string, string>;
   voteResult: VoteResultData | null;
+  // Post-Game continue/exit
+  postGameResponses: Record<string, 'continue' | 'exit'>;
+  postGameDeadline: number | null;
+  hostDisconnectedAt: number | null;
   createdAt: number;
 }
 
@@ -144,8 +152,8 @@ export interface GameSession {
 
 export interface ClientToServerEvents {
   // Session
-  'session:create': (callback: (response: SessionResponse) => void) => void;
-  'session:join': (code: string, playerName: string, callback: (response: SessionResponse) => void) => void;
+  'session:create': (hostPlayerId: string, callback: (response: SessionResponse) => void) => void;
+  'session:join': (code: string, playerName: string, playerId: string, callback: (response: SessionResponse) => void) => void;
   // Host commands
   'host:start_game': (callback: (response: BaseResponse) => void) => void;
   'host:set_phase': (phase: string, callback: (response: BaseResponse) => void) => void;
@@ -163,6 +171,9 @@ export interface ClientToServerEvents {
   'mafia:chat': (text: string, callback: (response: BaseResponse) => void) => void;
   'vote:cast': (targetId: string, callback: (response: BaseResponse) => void) => void;
   'chat:send': (text: string, callback: (response: BaseResponse) => void) => void;
+  // Post-game
+  'post_game:respond': (choice: 'continue' | 'exit', callback: (response: BaseResponse) => void) => void;
+  'host:start_new_round': (callback: (response: BaseResponse) => void) => void;
 }
 
 export interface ServerToClientEvents {
@@ -185,6 +196,9 @@ export interface ServerToClientEvents {
   'voting:state': (data: { open: boolean }) => void;
   'game:over': (data: GameOverData) => void;
   'audio:cue': (data: AudioCuePayload) => void;
+  // Post-game
+  'post_game:start': (data: PostGameStartData) => void;
+  'post_game:update': (data: PostGameUpdateData) => void;
   'error': (message: string) => void;
 }
 
@@ -263,4 +277,20 @@ export interface SessionResponse extends BaseResponse {
   session?: GameSession;
   playerId?: string;
   isHost?: boolean;
+}
+
+// Post-Game Types
+export interface PostGameStartData {
+  winner: 'MAFIA' | 'CITIZENS';
+  winnerName: string;
+  deadline: number; // timestamp
+  duration: number; // seconds
+}
+
+export interface PostGameUpdateData {
+  responses: Record<string, 'continue' | 'exit'>;
+  continueCount: number;
+  exitCount: number;
+  totalPlayers: number;
+  deadline: number;
 }

@@ -35,7 +35,9 @@ app.prepare().then(() => {
 
   // Import and setup socket handlers
   const { setupSocketServer } = require('./dist/server/socket');
+  const { startGraceCleanupLoop } = require('./dist/server/gameEngine');
   setupSocketServer(io);
+  startGraceCleanupLoop();
 
   httpServer.listen(port, '0.0.0.0', () => {
     console.log('');

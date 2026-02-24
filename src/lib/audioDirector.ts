@@ -6,7 +6,7 @@
 // Background music with ducking + SFX overlay
 // ============================================
 
-export type SFXKey = 'cry' | 'file' | 'report' | 'walks' | 'pistol1' | 'pistol2' | 'pistol3';
+export type SFXKey = 'cry' | 'file' | 'report' | 'walks' | 'pistol1' | 'pistol2' | 'pistol3' | 'hart';
 
 export interface AudioCue {
   type: 'duck_and_play' | 'play_only' | 'duck' | 'restore' | 'stop_bg' | 'start_bg';
@@ -25,6 +25,7 @@ const SFX_PATHS: Record<SFXKey, string> = {
   pistol1: '/music/Pistol1.mp3',
   pistol2: '/music/Pistol2.mp3',
   pistol3: '/music/Pistol3.mp3',
+  hart: '/music/hart.mp3',
 };
 
 const BG_PATH = '/music/125.mp3';
@@ -213,12 +214,82 @@ class AudioDirector {
     if (this.sfxGain && this.ctx) {
       this.sfxGain.gain.setValueAtTime(this.muted ? 0 : DEFAULT_SFX_VOLUME, this.ctx.currentTime);
     }
+    if (this.ambientGain && this.ctx) {
+      this.ambientGain.gain.setValueAtTime(this.muted ? 0 : this.ambientVolume, this.ctx.currentTime);
+    }
     return this.muted;
   }
 
   isMuted(): boolean { return this.muted; }
   isReady(): boolean { return this.initialized; }
   isPlaying(): boolean { return this.bgPlaying; }
+
+  // ========== Ambient Loop System ==========
+  // صوت محيطي يشتغل loop مع fade in/out ناعم
+  // مثالي لنبضات القلب أثناء النقاش والتصويت
+  private ambientSource: AudioBufferSourceNode | null = null;
+  private ambientGain: GainNode | null = null;
+  private ambientKey: string | null = null;
+  private ambientVolume = 0.5;
+
+  /**
+   * تشغيل صوت محيطي بشكل loop مع fade in تدريجي
+   */
+  startAmbient(key: SFXKey, volume: number = 0.5, fadeInSec: number = 2.0): void {
+    if (!this.ctx || this.muted) return;
+    // لو نفس الصوت شغال، لا تعيد تشغيله
+    if (this.ambientKey === key && this.ambientSource) return;
+    // لو صوت ثاني شغال، أوقفه أولاً
+    if (this.ambientSource) this.stopAmbient(0.5);
+
+    const buffer = this.buffers.get(key);
+    if (!buffer) { console.warn(`🎵 Ambient not loaded: ${key}`); return; }
+
+    this.ambientGain = this.ctx.createGain();
+    this.ambientGain.gain.setValueAtTime(0, this.ctx.currentTime);
+    this.ambientGain.gain.linearRampToValueAtTime(
+      volume, this.ctx.currentTime + fadeInSec
+    );
+    this.ambientGain.connect(this.ctx.destination);
+
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    source.connect(this.ambientGain);
+    source.start(0);
+
+    this.ambientSource = source;
+    this.ambientKey = key;
+    this.ambientVolume = volume;
+    console.log(`💓 Ambient started: ${key} (fade ${fadeInSec}s)`);
+  }
+
+  /**
+   * إيقاف الصوت المحيطي مع fade out تدريجي
+   */
+  stopAmbient(fadeOutSec: number = 1.5): void {
+    if (!this.ctx || !this.ambientSource || !this.ambientGain) return;
+
+    const gain = this.ambientGain;
+    const source = this.ambientSource;
+
+    gain.gain.cancelScheduledValues(this.ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, this.ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + fadeOutSec);
+
+    // إيقاف فعلي بعد انتهاء الـ fade
+    setTimeout(() => {
+      try { source.stop(); } catch { /* already stopped */ }
+    }, fadeOutSec * 1000 + 100);
+
+    this.ambientSource = null;
+    this.ambientGain = null;
+    this.ambientKey = null;
+    console.log(`💓 Ambient stopping (fade ${fadeOutSec}s)`);
+  }
+
+  isAmbientPlaying(): boolean { return this.ambientSource !== null; }
+  getAmbientKey(): string | null { return this.ambientKey; }
 
   /**
    * Resume AudioContext if suspended (autoplay policy)

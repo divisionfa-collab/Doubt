@@ -6,14 +6,55 @@ import { useSocket } from '@/lib/useSocket';
 import { GamePhase, PlayerRole, PHASE_INFO } from '@/types/game';
 import { CinematicOverlay, useCinematicOverlay } from '@/components/CinematicOverlay';
 
+// 💀 Dramatic death causes
+const DEATH_CAUSES = [
+  '🔫 طلق ناري في الظلام',
+  '🗡️ طعنة غادرة',
+  '🪢 شُنق عند الفجر',
+  '🩸 نزيف حاد',
+  '☠️ سُمّ في الشاي',
+  '🔥 احترق وهو نائم',
+  '💉 جرعة قاتلة',
+  '🪓 ضربة فأس',
+  '🌊 غرق في النهر',
+  '⚡ صعقة كهربائية',
+  '🧱 سقط من السطح',
+  '🐍 لدغة أفعى',
+  '💣 انفجار مفاجئ',
+  '🥶 تجمّد في العاصفة',
+  '🎭 خُنق بوسادة',
+];
+function getDeathCause(playerName: string): string {
+  let hash = 0;
+  for (let i = 0; i < playerName.length; i++) hash = ((hash << 5) - hash) + playerName.charCodeAt(i);
+  return DEATH_CAUSES[Math.abs(hash) % DEATH_CAUSES.length];
+}
+
+// PostGame countdown for host
+function PostGameTimerHost({ deadline }: { deadline: number }) {
+  const [secondsLeft, setSecondsLeft] = useState(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setSecondsLeft(left);
+      if (left <= 0) clearInterval(interval);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [deadline]);
+  return (
+    <span className="text-doubt-gold font-bold">⏳ {secondsLeft}s</span>
+  );
+}
+
 function HostContent() {
   const router = useRouter();
   const {
     isConnected, session, isHost, myRole, phaseData, nightTarget,
-    morningResult, voteUpdate, voteResult, messages, mafiaMessages, nightReadiness, gameOver, error,
+    morningResult, voteUpdate, voteResult, messages, mafiaMessages, nightReadiness,
+    gameOver, postGameStart, postGameUpdate, error,
     createSession, hostStartGame, hostSetPhase, hostOpenChat, hostCloseChat,
     hostOpenVoting, hostCloseVoting, hostResolveNight, hostSendPrompt, hostRestartGame,
-    initAudio, toggleMute,
+    hostStartNewRound, initAudio, toggleMute,
   } = useSocket();
 
   const [hasCreated, setHasCreated] = useState(false);
@@ -103,42 +144,134 @@ function HostContent() {
     );
   }
 
-  // GAME OVER
-  if (gameOverLocal && (gameOver || session.isGameOver)) {
+  // GAME OVER - Host sees roles, can trigger POST_GAME
+  if (gameOverLocal && (gameOver || session.isGameOver) && currentPhase !== GamePhase.POST_GAME) {
+    const isMafiaWin = gameOver?.winner === 'MAFIA_WIN';
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4 phase-result">
-        <div className="text-center animate-fade-in max-w-lg w-full">
-          <div className="text-8xl mb-4">🏁</div>
-          <h1 className="text-4xl font-bold mb-2">انتهت اللعبة!</h1>
-          <div className={`text-3xl font-bold mb-6 ${gameOver?.winner === 'MAFIA_WIN' ? 'text-doubt-accent' : 'text-green-400'}`}>
-            {gameOver?.winnerName} فازوا! 🎉
+      <div className="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden" style={{ background: 'linear-gradient(180deg, #0a0000 0%, #1a0505 40%, #0d0d0d 100%)' }}>
+        {/* Blood drip effect */}
+        <div className="absolute top-0 left-0 w-full h-1" style={{ background: 'linear-gradient(90deg, transparent, #8b0000, #ff0000, #8b0000, transparent)' }} />
+        <div className="absolute top-0 left-[15%] w-1 h-16 rounded-b-full opacity-60" style={{ background: 'linear-gradient(180deg, #8b0000, transparent)' }} />
+        <div className="absolute top-0 left-[45%] w-0.5 h-10 rounded-b-full opacity-40" style={{ background: 'linear-gradient(180deg, #8b0000, transparent)' }} />
+        <div className="absolute top-0 right-[25%] w-1.5 h-20 rounded-b-full opacity-50" style={{ background: 'linear-gradient(180deg, #8b0000, transparent)' }} />
+        <div className="absolute top-0 right-[60%] w-0.5 h-8 rounded-b-full opacity-30" style={{ background: 'linear-gradient(180deg, #8b0000, transparent)' }} />
+
+        <div className="text-center animate-fade-in max-w-lg w-full relative z-10">
+          <div className="text-7xl mb-3">{isMafiaWin ? '🔪' : '⚰️'}</div>
+          <h1 className="text-4xl font-bold mb-1 text-white/90">انتهت اللعبة</h1>
+          <div className="text-3xl font-bold mb-6" style={{ color: isMafiaWin ? '#ff4444' : '#c9a84c' }}>
+            {gameOver?.winnerName} فازوا
           </div>
+
+          {/* Players reveal */}
           <div className="space-y-2 mb-6">
             {(gameOver?.players || session.players).map(p => (
-              <div key={p.id} className={`flex items-center gap-3 p-3 rounded-xl ${p.isAlive ? 'bg-white/10' : 'bg-white/5 opacity-60'}`}>
+              <div key={p.id} className={`flex items-center gap-3 p-3 rounded-xl border ${
+                !p.isAlive 
+                  ? 'bg-black/40 border-red-900/30 opacity-60'
+                  : p.role === 'MAFIA'
+                    ? 'bg-red-950/30 border-red-800/30'
+                    : 'bg-white/5 border-white/5'
+              }`}>
                 <span className="text-xl">{roleIcons[p.role || ''] || '👤'}</span>
-                <span className="flex-1">{p.name}</span>
+                <span className="flex-1 text-white/80">{p.name}</span>
                 <span className={`text-xs px-2 py-1 rounded-full ${
-                  p.role === 'MAFIA' ? 'bg-doubt-accent/20 text-doubt-accent' :
-                  p.role === 'DOCTOR' ? 'bg-blue-500/20 text-blue-400' :
-                  p.role === 'DETECTIVE' ? 'bg-purple-500/20 text-purple-400' :
-                  'bg-green-500/20 text-green-400'
+                  p.role === 'MAFIA' ? 'bg-red-900/40 text-red-400' :
+                  p.role === 'DOCTOR' ? 'bg-blue-900/30 text-blue-300/70' :
+                  p.role === 'DETECTIVE' ? 'bg-purple-900/30 text-purple-300/70' :
+                  'bg-white/5 text-white/40'
                 }`}>{roleNames[p.role || ''] || '?'}</span>
-                {!p.isAlive && <span>💀</span>}
+                {!p.isAlive && <span className="text-sm font-medium text-red-400/90 mr-1" style={{ textShadow: '0 0 8px rgba(255,60,60,0.6), 0 0 16px rgba(255,0,0,0.3)' }}>{getDeathCause(p.name)}</span>}
               </div>
             ))}
           </div>
+
+          {/* Action buttons */}
           <div className="flex gap-3">
             <button onClick={async () => {
               await hostRestartGame();
               setGameOverLocal(false);
-            }} className="flex-1 py-3 bg-doubt-gold/20 text-doubt-gold rounded-xl text-lg font-bold hover:bg-doubt-gold/30">
-              🔄 لعبة جديدة
+            }} className="flex-1 py-3 rounded-xl text-lg font-bold border transition-all hover:scale-[1.02]" style={{ background: 'rgba(139,0,0,0.2)', borderColor: 'rgba(255,68,68,0.3)', color: '#ff6666' }}>
+              🎮 لعبة جديدة
             </button>
-            <button onClick={() => router.push('/')} className="flex-1 py-3 bg-white/10 rounded-xl text-lg font-bold hover:bg-white/15">
-              🏠 خروج
+            <button onClick={() => router.push('/')} className="flex-1 py-3 bg-white/5 border border-white/10 rounded-xl text-lg font-bold text-white/50 hover:bg-white/10 transition-all">
+              🚪 خروج
             </button>
           </div>
+        </div>
+
+        {/* Red vignette */}
+        <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse at center, transparent 50%, rgba(100,0,0,0.15) 100%)' }} />
+      </div>
+    );
+  }
+
+  // POST_GAME - Host dashboard: see who continues/exits
+  if (currentPhase === GamePhase.POST_GAME && postGameStart) {
+    const deadline = postGameStart.deadline;
+    const continueCount = postGameUpdate?.continueCount || 0;
+    const exitCount = postGameUpdate?.exitCount || 0;
+    const pending = session.players.length - continueCount - exitCount;
+    const canStart = continueCount >= 2;
+
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-4 phase-lobby">
+        <div className="text-center animate-fade-in max-w-lg w-full">
+          <div className="text-6xl mb-4">🎬</div>
+          <h1 className="text-3xl font-bold mb-2">بين الجولات</h1>
+          <p className={`text-lg font-bold mb-6 ${postGameStart.winner === 'MAFIA' ? 'text-doubt-accent' : 'text-green-400'}`}>
+            الفائز: {postGameStart.winnerName}
+          </p>
+
+          {/* Player Status Cards */}
+          <div className="space-y-2 mb-6">
+            {session.players.map(p => {
+              const response = postGameUpdate?.responses?.[p.id];
+              return (
+                <div key={p.id} className={`flex items-center gap-3 p-3 rounded-xl ${
+                  response === 'continue' ? 'bg-green-500/10 border border-green-500/20' :
+                  response === 'exit' ? 'bg-red-500/10 border border-red-500/20 opacity-50' :
+                  'bg-white/5 border border-white/10'
+                }`}>
+                  <span className="text-lg">
+                    {response === 'continue' ? '✅' : response === 'exit' ? '❌' : '⏳'}
+                  </span>
+                  <span className="flex-1 text-right">{p.name}</span>
+                  <span className={`text-xs ${
+                    response === 'continue' ? 'text-green-400' :
+                    response === 'exit' ? 'text-red-400' :
+                    'text-doubt-muted animate-pulse'
+                  }`}>
+                    {response === 'continue' ? 'مستمر' : response === 'exit' ? 'معتذر' : 'منتظر...'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Summary Bar */}
+          <div className="bg-white/5 rounded-xl p-3 mb-4 flex items-center justify-center gap-4 text-sm">
+            <span className="text-green-400">✅ {continueCount}</span>
+            <span className="text-red-400">❌ {exitCount}</span>
+            <span className="text-doubt-muted">⏳ {pending}</span>
+            <PostGameTimerHost deadline={deadline} />
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-3">
+            <button onClick={async () => {
+              await hostStartNewRound();
+              setGameOverLocal(false);
+            }} disabled={!canStart}
+              className={`flex-1 py-3 rounded-xl text-lg font-bold transition-all ${
+                canStart
+                  ? 'bg-doubt-gold/20 text-doubt-gold hover:bg-doubt-gold/30'
+                  : 'bg-white/5 text-white/30 cursor-not-allowed'
+              }`}>
+              🚀 ابدأ الجولة الجديدة {canStart ? `(${continueCount})` : ''}
+            </button>
+          </div>
+          {!canStart && <p className="text-xs text-doubt-muted mt-2">يجب وجود لاعبين على الأقل</p>}
         </div>
       </div>
     );

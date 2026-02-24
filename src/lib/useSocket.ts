@@ -7,6 +7,7 @@ import type {
   Player, RoleAssignment, NightTargetData, MorningResult, GameOverData,
   VoteUpdateData, VoteResultData, ChatMessage, MafiaChatMessage, DetectiveResult,
   NightReadiness, AudioCuePayload, BaseResponse, SessionResponse,
+  PostGameStartData, PostGameUpdateData,
 } from '@/types/game';
 import { audioDirector, type SFXKey } from '@/lib/audioDirector';
 
@@ -16,10 +17,53 @@ const SOCKET_URL = typeof window !== 'undefined'
 
 type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
+// EO-A01: Stable player identity
+// Host uses localStorage (persists across tabs for reconnect)
+// Players use sessionStorage (unique per tab for multi-player testing)
+function getStablePlayerId(forHost = false): string {
+  if (typeof window === 'undefined') return '';
+  
+  if (forHost) {
+    // Host: persistent across tabs
+    let id = localStorage.getItem('doubt_host_id');
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem('doubt_host_id', id);
+    }
+    return id;
+  }
+  
+  // Player: unique per tab (sessionStorage)
+  let id = sessionStorage.getItem('doubt_player_id');
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem('doubt_player_id', id);
+  }
+  return id;
+}
+
+// EO-A01: Save/restore session info for reconnect
+function saveSessionInfo(code: string, name: string, isHost: boolean) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('doubt_session', JSON.stringify({ code, name, isHost }));
+}
+function getSavedSession(): { code: string; name: string; isHost: boolean } | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem('doubt_session');
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function clearSavedSession() {
+  if (typeof window !== 'undefined') localStorage.removeItem('doubt_session');
+}
+
 export function useSocket() {
   const socketRef = useRef<GameSocket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [session, setSession] = useState<GameSession | null>(null);
+  const sessionRef = useRef<GameSession | null>(null); // for reconnect closure
+  const reconnectingRef = useRef(false); // prevent double auto-reconnect
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [isHost, setIsHost] = useState(false);
   const [myRole, setMyRole] = useState<RoleAssignment | null>(null);
@@ -38,15 +82,50 @@ export function useSocket() {
   const [votingOpen, setVotingOpen] = useState(false);
   const [nightReadiness, setNightReadiness] = useState<NightReadiness | null>(null);
   const [gameOver, setGameOver] = useState<GameOverData | null>(null);
+  const [postGameStart, setPostGameStart] = useState<PostGameStartData | null>(null);
+  const [postGameUpdate, setPostGameUpdate] = useState<PostGameUpdateData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const socket: GameSocket = io(SOCKET_URL, { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
 
-    socket.on('connect', () => { setIsConnected(true); setError(null); });
+    socket.on('connect', () => {
+      setIsConnected(true); setError(null);
+
+      // EO-A01: Auto-reconnect if we have saved session
+      // Skip if session already exists (prevents reconnect loop)
+      if (sessionRef.current) return;
+
+      const saved = getSavedSession();
+      if (!saved || reconnectingRef.current) return;
+
+      reconnectingRef.current = true;
+      const stableId = getStablePlayerId(saved.isHost);
+      if (saved.isHost) {
+        (socket as any).emit('session:create', stableId, (r: any) => {
+          reconnectingRef.current = false;
+          if (r.success && r.session) {
+            setSession(r.session); setPlayerId(stableId); setIsHost(true);
+            sessionRef.current = r.session;
+          } else {
+            clearSavedSession();
+          }
+        });
+      } else {
+        (socket as any).emit('session:join', saved.code, saved.name, stableId, (r: any) => {
+          reconnectingRef.current = false;
+          if (r.success && r.session) {
+            setSession(r.session); setPlayerId(stableId); setIsHost(false);
+            sessionRef.current = r.session;
+          } else {
+            clearSavedSession();
+          }
+        });
+      }
+    });
     socket.on('disconnect', () => setIsConnected(false));
-    socket.on('session:updated', (s: GameSession) => setSession(s));
+    socket.on('session:updated', (s: GameSession) => { setSession(s); sessionRef.current = s; });
 
     socket.on('phase:changed', (data: PhaseChangeData) => {
       setPhaseData(data);
@@ -54,6 +133,7 @@ export function useSocket() {
         setGameOver(null); setMyRole(null); setMorningResult(null);
         setVoteResult(null); setVoteUpdate(null); setMessages([]);
         setMafiaMessages([]); setNightReadiness(null); setDetectiveHistory([]);
+        setPostGameStart(null); setPostGameUpdate(null);
       }
       if (data.phase === 'NIGHT') {
         setNightTarget(null); setMorningResult(null); setVoteUpdate(null);
@@ -108,6 +188,8 @@ export function useSocket() {
       else execute();
     });
     socket.on('game:over', (data: GameOverData) => setGameOver(data));
+    socket.on('post_game:start', (data: PostGameStartData) => setPostGameStart(data));
+    socket.on('post_game:update', (data: PostGameUpdateData) => setPostGameUpdate(data));
     socket.on('error', (msg: string) => setError(msg));
 
     return () => { socket.disconnect(); };
@@ -127,9 +209,13 @@ export function useSocket() {
   const createSession = useCallback(async (): Promise<boolean> => {
     return new Promise((resolve) => {
       if (!socketRef.current) { setError('غير متصل'); resolve(false); return; }
-      socketRef.current.emit('session:create', (r: SessionResponse) => {
+      const stableId = getStablePlayerId(true);
+      (socketRef.current as any).emit('session:create', stableId, (r: SessionResponse) => {
         if (r.success && r.session) {
-          setSession(r.session); setPlayerId(r.playerId || null); setIsHost(true); setError(null); resolve(true);
+          setSession(r.session); setPlayerId(r.playerId || stableId); setIsHost(true); setError(null);
+          sessionRef.current = r.session;
+          saveSessionInfo(r.session.code, '__HOST__', true);
+          resolve(true);
         } else { setError(r.error || 'فشل'); resolve(false); }
       });
     });
@@ -138,9 +224,13 @@ export function useSocket() {
   const joinSession = useCallback(async (code: string, playerName: string): Promise<boolean> => {
     return new Promise((resolve) => {
       if (!socketRef.current) { setError('غير متصل'); resolve(false); return; }
-      socketRef.current.emit('session:join', code, playerName, (r: SessionResponse) => {
+      const stableId = getStablePlayerId();
+      (socketRef.current as any).emit('session:join', code, playerName, stableId, (r: SessionResponse) => {
         if (r.success && r.session) {
-          setSession(r.session); setPlayerId(r.playerId || null); setIsHost(false); setError(null); resolve(true);
+          setSession(r.session); setPlayerId(r.playerId || stableId); setIsHost(false); setError(null);
+          sessionRef.current = r.session;
+          saveSessionInfo(code, playerName, false);
+          resolve(true);
         } else { setError(r.error || 'فشل'); resolve(false); }
       });
     });
@@ -150,14 +240,17 @@ export function useSocket() {
     isConnected, session, playerId, isHost, myRole, phaseData,
     nightTarget, morningResult, voteUpdate, voteResult, messages,
     mafiaMessages, detectiveResult, detectiveHistory, doctorConfirm, detectiveConfirm,
-    chatOpen, votingOpen, nightReadiness, gameOver, error,
+    chatOpen, votingOpen, nightReadiness, gameOver, postGameStart, postGameUpdate, error,
     createSession, joinSession,
+    clearSavedSession: useCallback(() => { clearSavedSession(); setSession(null); sessionRef.current = null; }, []),
     initAudio: useCallback(async () => {
       await audioDirector.init();
       await audioDirector.resume();
       audioDirector.playBackground();
     }, []),
     toggleMute: useCallback(() => audioDirector.toggleMute(), []),
+    startAmbient: useCallback((key: string, vol?: number) => audioDirector.startAmbient(key as any, vol), []),
+    stopAmbient: useCallback((fade?: number) => audioDirector.stopAmbient(fade), []),
     hostStartGame: useCallback(() => emitCb('host:start_game'), [emitCb]),
     hostSetPhase: useCallback((p: string) => emitCb('host:set_phase', p), [emitCb]),
     hostOpenChat: useCallback(() => emitCb('host:open_chat'), [emitCb]),
@@ -173,5 +266,7 @@ export function useSocket() {
     sendMafiaChat: useCallback((t: string) => emitCb('mafia:chat', t), [emitCb]),
     castVote: useCallback((t: string) => emitCb('vote:cast', t), [emitCb]),
     sendMessage: useCallback((t: string) => emitCb('chat:send', t), [emitCb]),
+    postGameRespond: useCallback((choice: 'continue' | 'exit') => emitCb('post_game:respond', choice), [emitCb]),
+    hostStartNewRound: useCallback(() => emitCb('host:start_new_round'), [emitCb]),
   };
 }
