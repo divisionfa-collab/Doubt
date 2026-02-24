@@ -130,6 +130,7 @@ export function joinSession(code: string, playerName: string, playerId: string):
 
   const session = sessions.get(sessionId);
   if (!session) return { error: 'الجلسة غير موجودة' };
+  if (session.isStarted && !session.isGameOver) return { error: 'اللعبة جارية' };
   if (session.players.length >= 20) return { error: 'الجلسة ممتلئة' };
   if (session.players.some(p => p.name === playerName)) return { error: 'الاسم مستخدم' };
 
@@ -195,11 +196,28 @@ export function startGame(hostId: string): { success: boolean; error?: string } 
   if ('error' in result) return { success: false, error: result.error };
   const { session, sessionId } = result;
 
-  if (session.isStarted) return { success: false, error: 'بدأت بالفعل' };
+  if (session.isStarted && !session.isGameOver) return { success: false, error: 'بدأت بالفعل' };
   if (session.players.length < 2) return { success: false, error: 'يجب لاعبان على الأقل' };
 
+  // Reset everything for new game (or first game)
   session.isStarted = true;
+  session.isGameOver = false;
+  session.winResult = null;
   session.round = 1;
+  session.messages = [];
+  session.mafiaMessages = [];
+  session.mafiaMsgCount = {};
+  session.votes = {};
+  session.voteResult = null;
+  session.nightActions = emptyNightActions();
+  session.lastKilled = null;
+  session.lastKilledName = null;
+  session.chatOpen = false;
+  session.votingOpen = false;
+
+  // Revive all players for new round
+  session.players.forEach(p => { p.isAlive = true; p.role = null; });
+
   console.log(`\n🚀 Game started: ${session.code} (${session.players.length} players)`);
 
   assignRoles(session);
@@ -297,6 +315,39 @@ export function hostSendPrompt(hostId: string, text: string): { success: boolean
 
   session.messages.push(message);
   if (callbacks) callbacks.onChatMessage(sessionId, message);
+  return { success: true };
+}
+
+export function hostRestartGame(hostId: string): { success: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  if (!session.isGameOver) return { success: false, error: 'اللعبة لم تنتهِ بعد' };
+
+  session.isStarted = false;
+  session.isGameOver = false;
+  session.winResult = null;
+  session.phase = GamePhase.LOBBY;
+  session.round = 0;
+  session.players.forEach(p => { p.isAlive = true; p.role = null; });
+  session.messages = [];
+  session.mafiaMessages = [];
+  session.mafiaMsgCount = {};
+  session.votes = {};
+  session.voteResult = null;
+  session.nightActions = emptyNightActions();
+  session.lastKilled = null;
+  session.lastKilledName = null;
+  session.chatOpen = false;
+  session.votingOpen = false;
+
+  console.log(`🔄 [${session.code}] Game reset to lobby (${session.players.length} players)`);
+
+  if (callbacks) {
+    callbacks.onPhaseChange(sessionId, { phase: GamePhase.LOBBY, round: 0, info: PHASE_INFO[GamePhase.LOBBY] });
+    callbacks.onSessionUpdated(sessionId, session);
+  }
   return { success: true };
 }
 
@@ -608,10 +659,19 @@ export function castVote(playerId: string, targetId: string): { success: boolean
   const aliveVoters = session.players.filter(p => p.isAlive);
   const totalVotes = Object.keys(session.votes).length;
 
+  // Calculate vote counts per candidate
+  const countMap: Record<string, number> = {};
+  Object.values(session.votes).forEach(tid => { countMap[tid] = (countMap[tid] || 0) + 1; });
+  const counts = Object.entries(countMap).map(([pid, votes]) => {
+    const p = session.players.find(pl => pl.id === pid);
+    return { playerId: pid, playerName: p?.name || '?', votes };
+  }).sort((a, b) => b.votes - a.votes);
+
   if (callbacks) {
     callbacks.onVoteUpdate(sessionId, {
       voterId: voter.id, voterName: voter.name,
       totalVotes, totalEligible: aliveVoters.length,
+      counts,
     });
   }
 

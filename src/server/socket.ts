@@ -9,6 +9,7 @@ import {
   setCallbacks, createSession, joinSession, leaveSession,
   startGame, hostSetPhase, hostOpenChat, hostCloseChat,
   hostOpenVoting, hostCloseVoting, hostResolveNight, hostSendPrompt,
+  hostRestartGame,
   selectNightTarget, doctorProtect, detectiveCheck, sendMafiaChat,
   castVote, sendChatMessage,
   getAliveMafiaIds, getHostId,
@@ -81,7 +82,8 @@ export function setupSocketServer(io: Server<ClientToServerEvents, ServerToClien
     socket.on('host:open_voting', (cb) => { try { cb(hostOpenVoting(socket.id)); } catch { cb({ success: false, error: 'خطأ' }); } });
     socket.on('host:close_voting', (cb) => { try { cb(hostCloseVoting(socket.id)); } catch { cb({ success: false, error: 'خطأ' }); } });
     socket.on('host:resolve_night', (cb) => { try { cb(hostResolveNight(socket.id)); } catch { cb({ success: false, error: 'خطأ' }); } });
-    socket.on('host:send_prompt', (text, cb) => { try { cb(hostSendPrompt(socket.id, text)); } catch { cb({ success: false, error: 'خطأ' }); } });
+    socket.on('host:send_prompt', (text: any, cb: any) => { try { cb(hostSendPrompt(socket.id, text)); } catch { cb({ success: false, error: 'خطأ' }); } });
+    socket.on('host:restart_game', (cb: any) => { try { cb(hostRestartGame(socket.id)); } catch { cb({ success: false, error: 'خطأ' }); } });
 
     // Player actions
     socket.on('night:select_target', (t, cb) => { try { cb(selectNightTarget(socket.id, t)); } catch { cb({ success: false, error: 'خطأ' }); } });

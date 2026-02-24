@@ -12,7 +12,7 @@ function HostContent() {
     isConnected, session, isHost, myRole, phaseData, nightTarget,
     morningResult, voteUpdate, voteResult, messages, mafiaMessages, nightReadiness, gameOver, error,
     createSession, hostStartGame, hostSetPhase, hostOpenChat, hostCloseChat,
-    hostOpenVoting, hostCloseVoting, hostResolveNight, hostSendPrompt,
+    hostOpenVoting, hostCloseVoting, hostResolveNight, hostSendPrompt, hostRestartGame,
     initAudio, toggleMute,
   } = useSocket();
 
@@ -21,6 +21,7 @@ function HostContent() {
   const [copied, setCopied] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const [gameOverLocal, setGameOverLocal] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const { overlayState, triggerPhaseTransition, triggerBloodSplash } = useCinematicOverlay();
 
@@ -31,6 +32,15 @@ function HostContent() {
   useEffect(() => {
     if (voteResult?.eliminated) triggerBloodSplash();
   }, [voteResult]);
+
+  useEffect(() => {
+    if (gameOver) setGameOverLocal(true);
+  }, [gameOver]);
+
+  // When session returns to lobby (after restart), dismiss game over
+  useEffect(() => {
+    if (session?.phase === 'LOBBY') setGameOverLocal(false);
+  }, [session?.phase]);
 
   useEffect(() => {
     if (isConnected && !hasCreated) {
@@ -55,9 +65,24 @@ function HostContent() {
   const copyLink = () => {
     if (!session) return;
     const url = `${window.location.origin}/join/${session.code}`;
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      prompt('انسخ الرابط:', url);
+    }
   };
 
   const handlePrompt = async () => {
@@ -79,7 +104,7 @@ function HostContent() {
   }
 
   // GAME OVER
-  if (gameOver || session.isGameOver) {
+  if (gameOverLocal && (gameOver || session.isGameOver)) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4 phase-result">
         <div className="text-center animate-fade-in max-w-lg w-full">
@@ -103,7 +128,17 @@ function HostContent() {
               </div>
             ))}
           </div>
-          <button onClick={() => router.push('/')} className="w-full py-3 bg-doubt-accent rounded-xl text-lg font-bold">🏠 العودة</button>
+          <div className="flex gap-3">
+            <button onClick={async () => {
+              await hostRestartGame();
+              setGameOverLocal(false);
+            }} className="flex-1 py-3 bg-doubt-gold/20 text-doubt-gold rounded-xl text-lg font-bold hover:bg-doubt-gold/30">
+              🔄 لعبة جديدة
+            </button>
+            <button onClick={() => router.push('/')} className="flex-1 py-3 bg-white/10 rounded-xl text-lg font-bold hover:bg-white/15">
+              🏠 خروج
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -177,8 +212,19 @@ function HostContent() {
 
       {/* Vote Progress */}
       {voteUpdate && (
-        <div className="bg-white/5 rounded-lg p-2">
-          <p className="text-xs text-doubt-muted">صوّت {voteUpdate.totalVotes} من {voteUpdate.totalEligible}</p>
+        <div className="bg-white/5 rounded-lg p-2 space-y-1">
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-doubt-muted">صوّت {voteUpdate.totalVotes} من {voteUpdate.totalEligible}</p>
+            <div className="w-16 h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div className="h-full bg-doubt-gold rounded-full transition-all" style={{ width: `${voteUpdate.totalVotes / voteUpdate.totalEligible * 100}%` }} />
+            </div>
+          </div>
+          {voteUpdate.counts && voteUpdate.counts.length > 0 && voteUpdate.counts.map(c => (
+            <div key={c.playerId} className="flex items-center gap-2 text-xs">
+              <span className="flex-1 text-right text-white/70">{c.playerName}</span>
+              <span className="text-doubt-gold font-bold">{c.votes}</span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -258,6 +304,16 @@ function HostContent() {
         </div>
       </div>
 
+      {/* Host Bulletin */}
+      {session.isStarted && (
+        <div className="shrink-0 bg-black/40 border-b border-white/5 px-3 py-1 flex items-center justify-center gap-4 text-[11px]">
+          <span className="text-red-400/80">💀 {session.players.filter(p => !p.isAlive).length}</span>
+          <span className="text-green-400/80">👥 {session.players.filter(p => p.isAlive).length}</span>
+          {morningResult?.killed && <span className="text-red-300">🩸 {morningResult.killedName}</span>}
+          {voteResult?.eliminated && <span className="text-amber-300">⚖️ {voteResult.eliminatedName}</span>}
+        </div>
+      )}
+
       {/* ===== MOBILE LAYOUT ===== */}
       <div className="flex-1 flex flex-col md:hidden overflow-hidden">
         {/* Controls always visible on mobile */}
@@ -310,36 +366,39 @@ function HostContent() {
 
         {/* Chat area (toggleable on mobile) */}
         {showChat && (
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {messages.length === 0 && <p className="text-center text-doubt-muted/30 text-sm py-8">💬 لا رسائل</p>}
-              {messages.map(msg => (
-                <div key={msg.id} className={`flex ${msg.isHost ? 'justify-center' : 'justify-end'}`}>
-                  {msg.isHost ? (
-                    <div className="bg-doubt-gold/10 border border-doubt-gold/20 px-3 py-1.5 rounded-2xl">
-                      <p className="text-xs text-doubt-gold">{msg.text}</p>
-                    </div>
-                  ) : (
-                    <div className="bg-white/5 px-3 py-1.5 rounded-2xl rounded-tl-sm max-w-[80%]">
-                      <p className="text-[10px] text-doubt-muted font-bold">{msg.playerName}</p>
-                      <p className="text-xs">{msg.text}</p>
-                    </div>
-                  )}
-                </div>
-              ))}
-              <div ref={chatEndRef} />
-            </div>
-            <div className="border-t border-white/10 p-2">
-              <div className="flex gap-2">
-                <input type="text" value={promptText} onChange={(e) => setPromptText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handlePrompt()}
-                  placeholder="رسالة للجميع..."
-                  className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm placeholder:text-doubt-muted/50 focus:outline-none focus:border-doubt-gold/30" dir="rtl" />
-                <button onClick={handlePrompt} disabled={!promptText.trim()}
-                  className="px-4 py-2.5 bg-doubt-gold/20 text-doubt-gold rounded-xl text-sm font-bold disabled:opacity-30">
-                  ↑
-                </button>
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {messages.length === 0 && <p className="text-center text-doubt-muted/30 text-sm py-8">💬 لا رسائل</p>}
+            {messages.map(msg => (
+              <div key={msg.id} className={`flex ${msg.isHost ? 'justify-center' : 'justify-end'}`}>
+                {msg.isHost ? (
+                  <div className="bg-doubt-gold/10 border border-doubt-gold/20 px-3 py-1.5 rounded-2xl">
+                    <p className="text-xs text-doubt-gold">{msg.text}</p>
+                  </div>
+                ) : (
+                  <div className="bg-white/5 px-3 py-1.5 rounded-2xl rounded-tl-sm max-w-[80%]">
+                    <p className="text-[10px] text-doubt-muted font-bold">{msg.playerName}</p>
+                    <p className="text-xs">{msg.text}</p>
+                  </div>
+                )}
               </div>
+            ))}
+            <div ref={chatEndRef} />
+          </div>
+        )}
+
+        {/* Host chat input - ALWAYS visible on mobile when game started */}
+        {session.isStarted && (
+          <div className="shrink-0 border-t border-white/10 p-2" style={{ background: '#0b0b0f' }}>
+            <div className="flex gap-2">
+              <input type="text" value={promptText} onChange={(e) => setPromptText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handlePrompt(); } }}
+                placeholder="👑 رسالة المدير..."
+                enterKeyHint="send"
+                className="flex-1 bg-black/60 border border-white/20 rounded-full px-3 py-2 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-doubt-gold/50" dir="rtl" />
+              <button onClick={handlePrompt} disabled={!promptText.trim()}
+                className="w-10 h-10 bg-doubt-gold/30 text-doubt-gold rounded-full flex items-center justify-center shrink-0 text-lg disabled:opacity-30 active:scale-90">
+                ↑
+              </button>
             </div>
           </div>
         )}

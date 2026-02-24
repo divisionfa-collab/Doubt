@@ -11,7 +11,7 @@ import type {
 import { audioDirector, type SFXKey } from '@/lib/audioDirector';
 
 const SOCKET_URL = typeof window !== 'undefined'
-  ? (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3001')
+  ? (process.env.NODE_ENV === 'production' ? '' : `http://${window.location.hostname}:3001`)
   : '';
 
 type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -50,6 +50,11 @@ export function useSocket() {
 
     socket.on('phase:changed', (data: PhaseChangeData) => {
       setPhaseData(data);
+      if (data.phase === 'LOBBY') {
+        setGameOver(null); setMyRole(null); setMorningResult(null);
+        setVoteResult(null); setVoteUpdate(null); setMessages([]);
+        setMafiaMessages([]); setNightReadiness(null); setDetectiveHistory([]);
+      }
       if (data.phase === 'NIGHT') {
         setNightTarget(null); setMorningResult(null); setVoteUpdate(null);
         setVoteResult(null); setMafiaMessages([]); setDetectiveResult(null);
@@ -161,6 +166,7 @@ export function useSocket() {
     hostCloseVoting: useCallback(() => emitCb('host:close_voting'), [emitCb]),
     hostResolveNight: useCallback(() => emitCb('host:resolve_night'), [emitCb]),
     hostSendPrompt: useCallback((t: string) => emitCb('host:send_prompt', t), [emitCb]),
+    hostRestartGame: useCallback(() => emitCb('host:restart_game'), [emitCb]),
     selectNightTarget: useCallback((t: string) => emitCb('night:select_target', t), [emitCb]),
     doctorProtect: useCallback((t: string) => emitCb('night:doctor_protect', t), [emitCb]),
     detectiveCheck: useCallback((t: string) => emitCb('night:detective_check', t), [emitCb]),

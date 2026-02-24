@@ -155,6 +155,7 @@ export interface ClientToServerEvents {
   'host:close_voting': (callback: (response: BaseResponse) => void) => void;
   'host:resolve_night': (callback: (response: BaseResponse) => void) => void;
   'host:send_prompt': (text: string, callback: (response: BaseResponse) => void) => void;
+  'host:restart_game': (callback: (response: BaseResponse) => void) => void;
   // Player actions
   'night:select_target': (targetId: string, callback: (response: BaseResponse) => void) => void;
   'night:doctor_protect': (targetId: string, callback: (response: BaseResponse) => void) => void;
@@ -214,6 +215,8 @@ export interface VoteUpdateData {
   voterName: string;
   totalVotes: number;
   totalEligible: number;
+  /** عدد الأصوات لكل مرشح - بدون كشف من صوّت */
+  counts: { playerId: string; playerName: string; votes: number }[];
 }
 
 export interface VoteResultData {
