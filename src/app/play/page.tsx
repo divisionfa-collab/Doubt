@@ -145,7 +145,7 @@ function PlayContent() {
     if (phase === 'DISCUSSION' || phase === 'VOTING') {
       // نبضات قلب — أعلى أثناء التصويت (توتر أكبر)
       const vol = phase === 'VOTING' ? 0.45 : 0.3;
-      startAmbient('hart', vol, phase === 'VOTING' ? 1.0 : 2.5);
+      startAmbient('hart', vol);
     } else {
       stopAmbient(1.5);
     }
