@@ -11,6 +11,7 @@ import {
   startGame, hostSetPhase, hostOpenChat, hostCloseChat,
   hostOpenVoting, hostCloseVoting, hostResolveNight, hostSendPrompt,
   hostRestartGame, postGameRespond, hostStartNewRound,
+  lockSessionCode,
   selectNightTarget, doctorProtect, detectiveCheck, sendMafiaChat,
   castVote, sendChatMessage,
   getAliveMafiaIds, getHostId,
@@ -141,6 +142,17 @@ export function setupSocketServer(io: Server<ClientToServerEvents, ServerToClien
     });
 
     // Host commands — resolve socket.id → playerId first
+    // EO-L01: Lock session code
+    socket.on('session:lock_code', (code: string, callback: any) => {
+      try {
+        const result = lockSessionCode(pid(socket.id), code);
+        if (result.session) {
+          io.to(result.session.id).emit('session:updated', sanitizeSession(result.session));
+        }
+        callback(result);
+      } catch { callback({ success: false, error: 'خطأ' }); }
+    });
+
     socket.on('host:start_game', (cb) => { try { cb(startGame(pid(socket.id))); } catch { cb({ success: false, error: 'خطأ' }); } });
     socket.on('host:set_phase', (phase, cb) => { try { cb(hostSetPhase(pid(socket.id), phase)); } catch { cb({ success: false, error: 'خطأ' }); } });
     socket.on('host:open_chat', (cb) => { try { cb(hostOpenChat(pid(socket.id))); } catch { cb({ success: false, error: 'خطأ' }); } });

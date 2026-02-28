@@ -100,6 +100,7 @@ function PlayContent() {
   const [killedList, setKilledList] = useState<string[]>([]);
   const [eliminatedList, setEliminatedList] = useState<string[]>([]);
   const [bulletinFlash, setBulletinFlash] = useState(false);
+  const [eventToast, setEventToast] = useState<string | null>(null);
   const [deathOverlay, setDeathOverlay] = useState<{ show: boolean; cause: 'killed' | 'eliminated' } | null>(null);
   const [wasAlive, setWasAlive] = useState(true);
   const hasShownDeath = useRef(false);
@@ -158,27 +159,33 @@ function PlayContent() {
     if (phaseData?.phase === 'LOBBY') { setSelectedTarget(null); setMyVote(null); setMafiaSentCount(0); }
   }, [phaseData?.phase]);
 
-  // Bulletin: track kills
+  // Bulletin: track kills + EO-UI02 toast
   useEffect(() => {
     if (morningResult?.killed && morningResult?.killedName) {
       setKilledList(prev => prev.includes(morningResult.killedName!) ? prev : [...prev, morningResult.killedName!]);
       setBulletinFlash(true);
       setTimeout(() => setBulletinFlash(false), 1500);
+      // EO-UI02: dramatic toast
+      setEventToast(`🩸 ${morningResult.killedName} — ${getDeathCause(morningResult.killedName!)}`);
+      setTimeout(() => setEventToast(null), 3500);
     }
   }, [morningResult]);
 
-  // Bulletin: track eliminations
+  // Bulletin: track eliminations + EO-UI02 toast
   useEffect(() => {
     if (voteResult?.eliminated && voteResult?.eliminatedName) {
       setEliminatedList(prev => prev.includes(voteResult.eliminatedName!) ? prev : [...prev, voteResult.eliminatedName!]);
       setBulletinFlash(true);
       setTimeout(() => setBulletinFlash(false), 1500);
+      // EO-UI02: dramatic toast
+      setEventToast(`⚖️ طُرد ${voteResult.eliminatedName} بحكم الأغلبية`);
+      setTimeout(() => setEventToast(null), 3500);
     }
   }, [voteResult]);
 
   // Reset bulletin on new game
   useEffect(() => {
-    if (session?.phase === 'LOBBY') { setKilledList([]); setEliminatedList([]); }
+    if (session?.phase === 'LOBBY') { setKilledList([]); setEliminatedList([]); setEventToast(null); }
   }, [session?.phase]);
 
   // WhatsApp-style smart auto-scroll
@@ -203,13 +210,15 @@ function PlayContent() {
   const isDetective = myRole?.role === PlayerRole.DETECTIVE;
   const amIAlive = session?.players.find(p => p.id === playerId)?.isAlive ?? true;
   const isSpectator = !amIAlive;
+  // EO-L02: مشاهد = دخل أثناء جولة جارية (بدون دور) vs ميت = كان يلعب ومات (عنده دور)
+  const amINewSpectator = session?.isStarted && !amIAlive && !myRole;
   const alivePlayers = session?.players.filter(p => p.isAlive) || [];
   const currentPhase = session?.phase || GamePhase.LOBBY;
   const phaseInfo = phaseData?.info || PHASE_INFO[currentPhase];
 
   // Detect death transition: alive → dead (once only, no repeat on reconnect)
   useEffect(() => {
-    if (wasAlive && !amIAlive && session?.isStarted && !hasShownDeath.current) {
+    if (wasAlive && !amIAlive && session?.isStarted && !hasShownDeath.current && !amINewSpectator) {
       hasShownDeath.current = true;
       const cause = currentPhase === GamePhase.RESULT || currentPhase === GamePhase.VOTING ? 'eliminated' : 'killed';
       setDeathOverlay({ show: true, cause });
@@ -222,6 +231,25 @@ function PlayContent() {
   useEffect(() => {
     if (session?.phase === 'LOBBY') { setWasAlive(true); setDeathOverlay(null); hasShownDeath.current = false; setPostGameChoice(null); }
   }, [session?.phase]);
+
+  // EO-UI03: Night atmosphere text rotation
+  const nightMessages = [
+    'الظلام يخفي الكثير...',
+    'شخص ما يتحرك بصمت...',
+    'الأنفاس ثقيلة في هذا الليل...',
+    'الثقة قد تكون قاتلة...',
+    'هناك من يراقب...',
+    'خطوات خفية تقترب...',
+    'لا أحد آمن الليلة...',
+  ];
+  const [nightTextIndex, setNightTextIndex] = useState(0);
+  useEffect(() => {
+    if (currentPhase !== GamePhase.NIGHT) { setNightTextIndex(0); return; }
+    const interval = setInterval(() => {
+      setNightTextIndex(prev => (prev + 1) % nightMessages.length);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [currentPhase]);
 
   // Force scroll when entering discussion phase
   useEffect(() => {
@@ -321,7 +349,8 @@ function PlayContent() {
                   p.role === 'DETECTIVE' ? 'bg-white/5 text-purple-300/70' :
                   'bg-white/5 text-white/40'
                 }`}>{roleNames[p.role || '']}</span>
-                {!p.isAlive && <span className="text-sm font-medium text-red-400/90 mr-1" style={{ textShadow: '0 0 8px rgba(255,60,60,0.6), 0 0 16px rgba(255,0,0,0.3)' }}>{getDeathCause(p.name)}</span>}
+                {!p.isAlive && p.role && <span className="text-sm font-medium text-red-400/90 mr-1" style={{ textShadow: '0 0 8px rgba(255,60,60,0.6), 0 0 16px rgba(255,0,0,0.3)' }}>{getDeathCause(p.name)}</span>}
+                {!p.isAlive && !p.role && <span className="text-[10px] text-white/20">👁️ مشاهد</span>}
               </div>
             ))}
           </div>
@@ -424,6 +453,16 @@ function PlayContent() {
       <CinematicOverlay state={overlayState} />
       {currentPhase === GamePhase.NIGHT && <div className="fixed inset-0 cinema-vignette-red pointer-events-none z-10" />}
 
+      {/* EO-UI02: Dramatic Event Toast */}
+      {eventToast && (
+        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-40 animate-fade-in pointer-events-none">
+          <div className="px-5 py-2.5 bg-black/85 backdrop-blur-md border border-red-500/20 rounded-2xl shadow-2xl text-sm text-white font-bold"
+            style={{ textShadow: '0 0 10px rgba(255,60,60,0.3)', boxShadow: '0 0 20px rgba(255,0,0,0.1), 0 4px 20px rgba(0,0,0,0.5)' }}>
+            {eventToast}
+          </div>
+        </div>
+      )}
+
       {/* Death Overlay - role-specific cinematic transition to spectator */}
       {deathOverlay?.show && (() => {
         const roleMsg = isMafia ? 'المخاطرة كانت جزءاً من اللعبة… شاهد من يكمل المهمة.'
@@ -458,7 +497,11 @@ function PlayContent() {
               {roleIcons[myRole.role]} {roleNames[myRole.role]}
             </span>
           )}
-          {!amIAlive && <span className="text-[10px] text-white/60 bg-white/10 px-2 py-0.5 rounded-full border border-white/10">👁️ وضع المشاهدة</span>}
+          {amINewSpectator ? (
+            <span className="text-[10px] text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/20 animate-pulse">👁️ مشاهد — ستشارك قريباً</span>
+          ) : (
+            !amIAlive && <span className="text-[10px] text-white/60 bg-white/10 px-2 py-0.5 rounded-full border border-white/10">👁️ وضع المشاهدة</span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setIsMuted(toggleMute())}
@@ -476,32 +519,52 @@ function PlayContent() {
         </div>
       </div>
 
-      {/* Game Bulletin - persistent status bar with round info */}
-      {session.isStarted && (killedList.length > 0 || eliminatedList.length > 0) && (
-        <div className={`shrink-0 bg-black/60 border-b border-white/5 px-3 py-1.5 flex items-center justify-center gap-2 text-[11px] transition-all duration-300 ${bulletinFlash ? 'bg-doubt-accent/10' : ''}`}>
-          <span className="text-doubt-gold/60 font-bold">R{session.round}</span>
-          <span className="text-white/10">—</span>
-          {killedList.length > 0 && (
-            <span className={`flex items-center gap-1 text-red-400/80 ${bulletinFlash && morningResult?.killed ? 'animate-pulse' : ''}`}>
-              <span className="text-red-300 font-bold">{killedList[killedList.length - 1]}</span>
-              <span className="text-red-400/50">·</span>
-              <span className="text-red-400/70" style={{ textShadow: '0 0 6px rgba(255,60,60,0.4)' }}>{getDeathCause(killedList[killedList.length - 1])}</span>
+      {/* EO-UI01: Live Round Dashboard - always visible during game */}
+      {session.isStarted && (
+        <div className="shrink-0 bg-black/50 backdrop-blur-sm border-b border-white/5 px-3 py-2">
+          {/* Row 1: Stats */}
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="flex items-center gap-1 text-green-400/80">
+              👥 <span className="text-green-300 font-bold">{alivePlayers.length}</span>
+              <span className="text-white/20">/ {session.players.length}</span>
             </span>
+            {(killedList.length > 0 || eliminatedList.length > 0) && (
+              <span className="text-red-400/60">💀 {killedList.length + eliminatedList.length} خرجوا</span>
+            )}
+            <span className="text-doubt-gold/70 font-bold">🎯 R{session.round}</span>
+          </div>
+
+          {/* Row 2: Latest events */}
+          {(killedList.length > 0 || eliminatedList.length > 0) && (
+            <div className={`mt-1.5 flex items-center justify-center gap-2 text-[11px] transition-all duration-300 ${bulletinFlash ? 'bg-doubt-accent/5 rounded-lg py-0.5' : ''}`}>
+              {killedList.length > 0 && (
+                <span className={`flex items-center gap-1 text-red-400/80 ${bulletinFlash && morningResult?.killed ? 'animate-pulse' : ''}`}>
+                  🩸 <span className="text-red-300 font-bold">{killedList[killedList.length - 1]}</span>
+                  <span className="text-red-400/40">·</span>
+                  <span className="text-red-400/60" style={{ textShadow: '0 0 6px rgba(255,60,60,0.3)' }}>{getDeathCause(killedList[killedList.length - 1])}</span>
+                </span>
+              )}
+              {killedList.length > 0 && eliminatedList.length > 0 && <span className="text-white/10">|</span>}
+              {eliminatedList.length > 0 && (
+                <span className={`flex items-center gap-1 text-amber-400/80 ${bulletinFlash && voteResult?.eliminated ? 'animate-pulse' : ''}`}>
+                  ⚖️ <span className="text-amber-300 font-bold">{eliminatedList[eliminatedList.length - 1]}</span>
+                </span>
+              )}
+            </div>
           )}
-          {eliminatedList.length > 0 && (
-            <>
-              {killedList.length > 0 && <span className="text-white/10">|</span>}
-              <span className={`flex items-center gap-1 text-amber-400/80 ${bulletinFlash && voteResult?.eliminated ? 'animate-pulse' : ''}`}>
-                ⚖️ <span className="text-amber-300 font-bold">{eliminatedList[eliminatedList.length - 1]}</span>
-                <span className="text-amber-400/50">·</span>
-                <span className="text-amber-400/70" style={{ textShadow: '0 0 6px rgba(255,180,60,0.4)' }}>🪢 أُعدم بحكم الأغلبية</span>
+
+          {/* Row 3: Alive players chips */}
+          <div className="flex flex-wrap justify-center gap-1 mt-1.5">
+            {alivePlayers.map(p => (
+              <span key={p.id} className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+                p.id === playerId 
+                  ? 'bg-doubt-gold/10 border-doubt-gold/30 text-doubt-gold/80' 
+                  : 'bg-white/3 border-white/5 text-white/40'
+              }`}>
+                {p.name}
               </span>
-            </>
-          )}
-          <span className="text-white/10">|</span>
-          <span className="flex items-center gap-1 text-green-400/80">
-            👥 <span className="text-green-300 font-bold">{alivePlayers.length}</span>
-          </span>
+            ))}
+          </div>
         </div>
       )}
 
@@ -555,7 +618,7 @@ function PlayContent() {
           {/* Chat input - fixed at bottom inside flex (WhatsApp style) */}
           {amIAlive ? (
             <div className="shrink-0 border-t border-white/10 px-3 py-2" style={{ background: '#0b0b0f', paddingBottom: 'calc(8px + env(safe-area-inset-bottom, 0px))' }}>
-              <div className="flex items-end gap-2 max-w-md mx-auto">
+              <div className="relative max-w-md mx-auto">
                 <input type="text" value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
@@ -564,20 +627,21 @@ function PlayContent() {
                   disabled={!chatOpen}
                   enterKeyHint="send"
                   autoComplete="off"
-                  className="flex-1 bg-black/60 border border-white/20 rounded-full px-4 py-2.5 text-sm text-white
+                  className="w-full bg-black/60 border border-white/20 rounded-full pl-12 pr-4 py-2.5 text-sm text-white
                              placeholder:text-white/30 focus:outline-none focus:border-doubt-gold/50
                              disabled:opacity-30" dir="rtl" />
                 <button onClick={handleSend} disabled={!chatOpen || !chatInput.trim()}
-                  className="w-10 h-10 bg-doubt-gold/30 text-doubt-gold rounded-full flex items-center justify-center shrink-0
-                             text-lg transition-all disabled:opacity-30 active:scale-90">
-                  ↑
+                  className="absolute left-1.5 top-1/2 -translate-y-1/2 w-8 h-8 bg-green-500 rounded-full flex items-center justify-center
+                             transition-all disabled:opacity-20 active:scale-90"
+                  style={{ boxShadow: '0 0 10px rgba(34,197,94,0.6), 0 0 20px rgba(34,197,94,0.3)' }}>
+                  <span className="text-white text-sm font-bold" style={{ marginLeft: '2px' }}>▶</span>
                 </button>
               </div>
             </div>
           ) : (
             <div className="shrink-0 border-t border-white/5 px-3 py-2 flex items-center justify-center gap-3" style={{ background: '#0b0b0f' }}>
               <span className="text-[10px] bg-white/5 border border-white/10 px-2 py-0.5 rounded-full text-white/25">👁️ مشاهدة</span>
-              <span className="text-[11px] text-white/20">تقرأ النقاش فقط</span>
+              <span className="text-[11px] text-white/20">{amINewSpectator ? 'ستشارك في الجولة القادمة' : 'تقرأ النقاش فقط'}</span>
             </div>
           )}
         </>
@@ -682,9 +746,30 @@ function PlayContent() {
                       </div>
                     </div>
                   ) : (
-                    <div className="text-center py-16">
+                    <div className="text-center py-12 relative">
+                      {/* EO-UI03: subtle red pulse glow */}
+                      <div className="absolute inset-0 pointer-events-none animate-pulse"
+                        style={{ background: 'radial-gradient(circle at 50% 50%, rgba(255,0,0,0.04), transparent 70%)' }} />
                       <div className="text-6xl mb-4">🌙</div>
-                      <p className="text-doubt-muted text-lg">😴 نم بسلام...</p>
+                      {amINewSpectator ? (
+                        <>
+                          <p className="text-blue-400 text-lg">👁️ أنت مشاهد</p>
+                          <p className="text-white/40 text-sm mt-2">ستشارك في الجولة القادمة</p>
+                        </>
+                      ) : (
+                        <>
+                          {/* EO-UI03: rotating atmosphere text - dramatic blood style */}
+                          <p className="text-red-400/80 text-xl font-bold animate-pulse transition-opacity duration-1000"
+                            style={{ textShadow: '0 0 15px rgba(255,0,0,0.5), 0 0 30px rgba(255,0,0,0.2)' }}
+                            key={nightTextIndex}>
+                            {nightMessages[nightTextIndex]}
+                          </p>
+                          <p className="text-red-900/40 text-xs mt-6 animate-pulse"
+                            style={{ textShadow: '0 0 8px rgba(255,0,0,0.3)' }}>
+                            ... أبقِ حواسك يقظة ...
+                          </p>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

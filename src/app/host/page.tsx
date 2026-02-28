@@ -52,7 +52,7 @@ function HostContent() {
     isConnected, session, isHost, myRole, phaseData, nightTarget,
     morningResult, voteUpdate, voteResult, messages, mafiaMessages, nightReadiness,
     gameOver, postGameStart, postGameUpdate, error,
-    createSession, hostStartGame, hostSetPhase, hostOpenChat, hostCloseChat,
+    createSession, lockSessionCode, hostStartGame, hostSetPhase, hostOpenChat, hostCloseChat,
     hostOpenVoting, hostCloseVoting, hostResolveNight, hostSendPrompt, hostRestartGame,
     hostStartNewRound, initAudio, toggleMute,
   } = useSocket();
@@ -62,6 +62,7 @@ function HostContent() {
   const [copied, setCopied] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const [customCode, setCustomCode] = useState('');
   const [gameOverLocal, setGameOverLocal] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const { overlayState, triggerPhaseTransition, triggerBloodSplash } = useCinematicOverlay();
@@ -451,12 +452,50 @@ function HostContent() {
       <div className="flex-1 flex flex-col md:hidden overflow-hidden">
         {/* Controls always visible on mobile */}
         <div className="bg-black/30 border-b border-white/10 p-3 space-y-2 shrink-0 overflow-y-auto max-h-[55vh]">
-          {/* Join Link */}
+          {/* EO-L01: Session Code Lock */}
           {!session.isStarted && (
-            <button onClick={copyLink}
-              className="w-full py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-sm font-bold">
-              {copied ? '✅ تم النسخ!' : '📋 نسخ الرابط'}
-            </button>
+            <div className="bg-white/5 rounded-xl p-3 space-y-2">
+              {!session.isCodeLocked ? (
+                <>
+                  <p className="text-[10px] text-doubt-muted text-center">🔓 كود الجلسة (قابل للتعديل)</p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customCode}
+                      onChange={(e) => setCustomCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
+                      placeholder={session.code}
+                      className="flex-1 bg-black/40 border border-white/20 rounded-lg px-3 py-2 text-sm 
+                                 text-doubt-gold text-center font-mono tracking-widest uppercase
+                                 placeholder:text-white/20 focus:outline-none focus:border-doubt-gold/50"
+                      dir="ltr"
+                    />
+                    <button
+                      onClick={async () => {
+                        const code = customCode.trim() || session.code;
+                        const ok = await lockSessionCode(code);
+                        if (ok) setCustomCode('');
+                      }}
+                      className="px-4 py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-sm font-bold 
+                                 hover:bg-doubt-gold/30 transition-all whitespace-nowrap active:scale-95"
+                    >
+                      🔒 تثبيت
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-doubt-muted/50 text-center">ثبّت الكود قبل مشاركة الرابط</p>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-center gap-2 mb-1">
+                    <span className="text-doubt-gold font-mono text-xl tracking-[0.3em] font-bold">{session.code}</span>
+                    <span className="text-[10px] text-green-400 bg-green-500/10 px-1.5 py-0.5 rounded-full">🔒 مثبت</span>
+                  </div>
+                  <button onClick={copyLink}
+                    className="w-full py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-sm font-bold hover:bg-doubt-gold/30 active:scale-95 transition-all">
+                    {copied ? '✅ تم النسخ!' : '📋 نسخ رابط الدعوة'}
+                  </button>
+                </>
+              )}
+            </div>
           )}
 
           {/* Players - compact horizontal */}
@@ -542,12 +581,50 @@ function HostContent() {
         {/* Sidebar */}
         <div className="w-72 bg-black/30 border-l border-white/10 flex flex-col overflow-y-auto p-3 space-y-3">
           {!session.isStarted && (
-            <div className="bg-white/5 rounded-xl p-3">
-              <p className="text-xs text-doubt-muted mb-2">رابط الانضمام</p>
-              <button onClick={copyLink}
-                className="w-full py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-sm font-bold hover:bg-doubt-gold/30">
-                {copied ? '✅ تم النسخ!' : '📋 نسخ الرابط'}
-              </button>
+            <div className="bg-white/5 rounded-xl p-3 space-y-2">
+              {!session.isCodeLocked ? (
+                <>
+                  <p className="text-xs text-doubt-muted">🔓 كود الجلسة</p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customCode}
+                      onChange={(e) => setCustomCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
+                      placeholder={session.code}
+                      className="flex-1 bg-black/40 border border-white/20 rounded-lg px-3 py-2 text-sm 
+                                 text-doubt-gold text-center font-mono tracking-widest uppercase
+                                 placeholder:text-white/20 focus:outline-none focus:border-doubt-gold/50"
+                      dir="ltr"
+                    />
+                    <button
+                      onClick={async () => {
+                        const code = customCode.trim() || session.code;
+                        const ok = await lockSessionCode(code);
+                        if (ok) setCustomCode('');
+                      }}
+                      className="px-3 py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-xs font-bold 
+                                 hover:bg-doubt-gold/30 transition-all whitespace-nowrap"
+                    >
+                      🔒 تثبيت
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-doubt-muted/50 text-center">ثبّت الكود قبل مشاركة الرابط</p>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs text-doubt-muted">رابط الانضمام</p>
+                    <span className="text-[10px] text-green-400 bg-green-500/10 px-1.5 py-0.5 rounded-full">🔒 مثبت</span>
+                  </div>
+                  <div className="text-center mb-2">
+                    <span className="text-doubt-gold font-mono text-2xl tracking-[0.3em] font-bold">{session.code}</span>
+                  </div>
+                  <button onClick={copyLink}
+                    className="w-full py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-sm font-bold hover:bg-doubt-gold/30">
+                    {copied ? '✅ تم النسخ!' : '📋 نسخ الرابط'}
+                  </button>
+                </>
+              )}
             </div>
           )}
 

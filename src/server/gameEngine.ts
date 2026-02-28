@@ -159,6 +159,7 @@ export function createSession(hostPlayerId: string, socketId: string): { session
     votingOpen: false, votes: {}, voteResult: null,
     postGameResponses: {}, postGameDeadline: null,
     hostDisconnectedAt: null,
+    isCodeLocked: false,
     createdAt: Date.now(),
   };
 
@@ -300,9 +301,24 @@ export function joinSession(code: string, playerName: string, playerId: string, 
   }
 
   // === NEW PLAYER ===
-  if (session.isStarted && !session.isGameOver) return { error: 'اللعبة جارية' };
   if (session.players.length >= 20) return { error: 'الجلسة ممتلئة' };
   if (session.players.some(p => p.name === playerName)) return { error: 'الاسم مستخدم' };
+
+  // EO-L02: الانضمام أثناء جولة جارية = مشاهد (isAlive=false, role=null)
+  if (session.isStarted && !session.isGameOver) {
+    const spectator: Player = {
+      id: playerId, socketId,
+      name: playerName, role: null,
+      isAlive: false, isConnected: true,
+      disconnectedAt: null, joinedAt: Date.now(),
+    };
+
+    session.players.push(spectator);
+    playerToSession.set(playerId, sessionId);
+    mapSocket(socketId, playerId);
+    console.log(`👁️ ${playerName} joined ${code} as SPECTATOR (${session.players.length} total)`);
+    return { session, player: spectator };
+  }
 
   const player: Player = {
     id: playerId, socketId,
@@ -532,6 +548,37 @@ export function hostRestartGame(hostId: string): { success: boolean; error?: str
   setTimeout(() => resolvePostGame(sessionId), duration * 1000);
 
   return { success: true };
+}
+
+// ============================================
+// EO-L01: Session Code Locking
+// ============================================
+
+export function lockSessionCode(hostId: string, newCode: string): { success: boolean; session?: GameSession; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  if (session.isStarted) return { success: false, error: 'لا يمكن تغيير الكود أثناء اللعب' };
+  if (session.isCodeLocked) return { success: false, error: 'الكود مثبت مسبقاً' };
+
+  const cleanCode = newCode.trim().toUpperCase();
+  if (cleanCode.length < 2 || cleanCode.length > 8) return { success: false, error: 'الكود يجب أن يكون 2-8 أحرف' };
+  if (!/^[A-Z0-9]+$/.test(cleanCode)) return { success: false, error: 'الكود يقبل أحرف إنجليزية وأرقام فقط' };
+
+  if (cleanCode !== session.code && codeToSessionId.has(cleanCode)) {
+    return { success: false, error: 'الكود مستخدم في جلسة أخرى' };
+  }
+
+  codeToSessionId.delete(session.code);
+  session.code = cleanCode;
+  session.isCodeLocked = true;
+  codeToSessionId.set(cleanCode, session.id);
+
+  console.log(`🔒 [${cleanCode}] Session code LOCKED by host`);
+
+  if (callbacks) callbacks.onSessionUpdated(sessionId, session);
+  return { success: true, session };
 }
 
 // ============================================
@@ -911,6 +958,12 @@ function resolveVotes(sessionId: string): void {
     const randomPistol = pistols[Math.floor(Math.random() * pistols.length)];
     const pistolCue: AudioCuePayload = { type: 'duck_and_play', file: randomPistol, duckTo: 0.08 };
     if (callbacks) callbacks.onAudioCue(sessionId, pistolCue);
+
+    // Check win after elimination
+    const winCheck = checkWinCondition(session);
+    if (winCheck) {
+      setTimeout(() => endGame(sessionId, winCheck), 3000); // delay for dramatic effect
+    }
   }
 }
 

@@ -236,12 +236,26 @@ export function useSocket() {
     });
   }, []);
 
+  // EO-L01: Lock session code
+  const lockSessionCode = useCallback(async (code: string): Promise<boolean> => {
+    if (!socketRef.current) return false;
+    return new Promise(resolve => {
+      (socketRef.current as any).emit('session:lock_code', code, (res: any) => {
+        if (res.error) {
+          setError(res.error);
+          setTimeout(() => setError(null), 3000);
+        }
+        resolve(res.success || false);
+      });
+    });
+  }, []);
+
   return {
     isConnected, session, playerId, isHost, myRole, phaseData,
     nightTarget, morningResult, voteUpdate, voteResult, messages,
     mafiaMessages, detectiveResult, detectiveHistory, doctorConfirm, detectiveConfirm,
     chatOpen, votingOpen, nightReadiness, gameOver, postGameStart, postGameUpdate, error,
-    createSession, joinSession,
+    createSession, joinSession, lockSessionCode,
     clearSavedSession: useCallback(() => { clearSavedSession(); setSession(null); sessionRef.current = null; }, []),
     initAudio: useCallback(async () => {
       await audioDirector.init();
