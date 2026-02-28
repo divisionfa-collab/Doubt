@@ -153,7 +153,6 @@ export function setupSocketServer(io: Server<ClientToServerEvents, ServerToClien
       } catch { callback({ success: false, error: 'خطأ' }); }
     });
 
-    socket.on('host:start_game',
     // EO-L01b: Toggle join open/closed
     socket.on('session:toggle_join', (callback: any) => {
       try {
@@ -161,7 +160,8 @@ export function setupSocketServer(io: Server<ClientToServerEvents, ServerToClien
         callback(result);
       } catch { callback({ success: false, error: 'خطأ' }); }
     });
- (cb) => { try { cb(startGame(pid(socket.id))); } catch { cb({ success: false, error: 'خطأ' }); } });
+
+    socket.on('host:start_game', (cb) => { try { cb(startGame(pid(socket.id))); } catch { cb({ success: false, error: 'خطأ' }); } });
     socket.on('host:set_phase', (phase, cb) => { try { cb(hostSetPhase(pid(socket.id), phase)); } catch { cb({ success: false, error: 'خطأ' }); } });
     socket.on('host:open_chat', (cb) => { try { cb(hostOpenChat(pid(socket.id))); } catch { cb({ success: false, error: 'خطأ' }); } });
     socket.on('host:close_chat', (cb) => { try { cb(hostCloseChat(pid(socket.id))); } catch { cb({ success: false, error: 'خطأ' }); } });
