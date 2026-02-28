@@ -52,7 +52,7 @@ function HostContent() {
     isConnected, session, isHost, myRole, phaseData, nightTarget,
     morningResult, voteUpdate, voteResult, messages, mafiaMessages, nightReadiness,
     gameOver, postGameStart, postGameUpdate, error,
-    createSession, lockSessionCode, hostStartGame, hostSetPhase, hostOpenChat, hostCloseChat,
+    createSession, lockSessionCode, toggleJoinOpen, hostStartGame, hostSetPhase, hostOpenChat, hostCloseChat,
     hostOpenVoting, hostCloseVoting, hostResolveNight, hostSendPrompt, hostRestartGame,
     hostStartNewRound, initAudio, toggleMute,
   } = useSocket();
@@ -492,6 +492,10 @@ function HostContent() {
                   <button onClick={copyLink}
                     className="w-full py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-sm font-bold hover:bg-doubt-gold/30 active:scale-95 transition-all">
                     {copied ? '✅ تم النسخ!' : '📋 نسخ رابط الدعوة'}
+                  </button>
+                  <button onClick={toggleJoinOpen}
+                    className={`w-full py-1.5 rounded-lg text-xs font-bold transition-all mt-1 ${session.isJoinOpen ? 'bg-green-500/15 text-green-400 border border-green-500/20' : 'bg-red-500/15 text-red-400 border border-red-500/20'}`}>
+                    {session.isJoinOpen ? '🚪 الانضمام مفتوح' : '🚫 الانضمام مغلق'}
                   </button>
                 </>
               )}

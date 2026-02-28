@@ -108,22 +108,35 @@ function PlayContent() {
   const code = searchParams.get('code') || '';
   const playerName = searchParams.get('name') || '';
 
-  // Join (or reconnect handles it)
+  // Join (or reconnect handles it) — with retry for slow connections
   useEffect(() => {
     if (!isConnected || hasJoined) return;
     // If session already set (from auto-reconnect), skip join
     if (session) { setHasJoined(true); return; }
     if (!code || !playerName) return;
-    joinSession(code, playerName).then(ok => {
-      if (!ok) setTimeout(() => router.push('/'), 2000);
-      else {
-        setHasJoined(true);
-        // Init audio on first user interaction (join = user action)
-        if (!audioStarted) {
-          initAudio().then(() => setAudioStarted(true));
+
+    let attempt = 0;
+    const maxRetries = 3;
+    const retryDelay = 1500;
+
+    const tryJoin = () => {
+      joinSession(code, playerName).then(ok => {
+        if (ok) {
+          setHasJoined(true);
+          if (!audioStarted) {
+            initAudio().then(() => setAudioStarted(true));
+          }
+        } else if (attempt < maxRetries) {
+          attempt++;
+          console.log(`🔄 Retry join ${attempt}/${maxRetries}...`);
+          setTimeout(tryJoin, retryDelay);
+        } else {
+          // All retries failed
+          setTimeout(() => router.push('/'), 2000);
         }
-      }
-    });
+      });
+    };
+    tryJoin();
   }, [isConnected, hasJoined, code, playerName, session]);
 
   // Phase transition cinematics
@@ -302,7 +315,11 @@ function PlayContent() {
         {error ? (
           <div className="text-center animate-fade-in">
             <p className="text-doubt-accent text-xl mb-2">❌ {error}</p>
-            <p className="text-doubt-muted text-sm">جاري العودة...</p>
+            <p className="text-doubt-muted text-sm mb-4">تأكد من الكود أو اطلبه من المدير</p>
+            <button onClick={() => window.location.href = '/'}
+              className="px-6 py-3 bg-doubt-gold/20 text-doubt-gold rounded-xl text-sm font-bold hover:bg-doubt-gold/30 transition-all">
+              🔑 أدخل كود يدوياً
+            </button>
           </div>
         ) : (
           <p className="text-xl text-doubt-muted animate-pulse">جاري الاتصال...</p>

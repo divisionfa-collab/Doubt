@@ -144,6 +144,7 @@ export interface GameSession {
   postGameDeadline: number | null;
   hostDisconnectedAt: number | null;
   isCodeLocked: boolean;
+  isJoinOpen: boolean;
   createdAt: number;
 }
 
@@ -156,6 +157,7 @@ export interface ClientToServerEvents {
   'session:create': (hostPlayerId: string, callback: (response: SessionResponse) => void) => void;
   'session:join': (code: string, playerName: string, playerId: string, callback: (response: SessionResponse) => void) => void;
   'session:lock_code': (code: string, callback: (response: BaseResponse) => void) => void;
+  'session:toggle_join': (callback: (response: BaseResponse) => void) => void;
   // Host commands
   'host:start_game': (callback: (response: BaseResponse) => void) => void;
   'host:set_phase': (phase: string, callback: (response: BaseResponse) => void) => void;

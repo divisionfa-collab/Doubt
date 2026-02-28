@@ -40,7 +40,13 @@ export default function HomePage() {
             className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-center text-2xl font-mono tracking-[0.3em]
                        placeholder:text-doubt-muted/50 focus:outline-none focus:border-doubt-gold/30" dir="ltr" />
           <button
-            onClick={() => name.trim() && code.trim() && router.push(`/play?code=${code}&name=${encodeURIComponent(name.trim())}`)}
+            onClick={() => {
+              if (name.trim() && code.trim()) {
+                // Clean old session cache
+                try { localStorage.removeItem('doubt_session'); sessionStorage.removeItem('doubt_player_id'); } catch {}
+                router.push(`/play?code=${code}&name=${encodeURIComponent(name.trim())}`);
+              }
+            }}
             disabled={!name.trim() || code.length < 4}
             className="w-full py-4 bg-doubt-gold/20 text-doubt-gold hover:bg-doubt-gold/30 rounded-xl text-xl font-bold
                        transition-all disabled:opacity-30 disabled:cursor-not-allowed">

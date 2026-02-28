@@ -238,6 +238,20 @@ export function useSocket() {
 
   // EO-L01: Lock session code
   const lockSessionCode = useCallback(async (code: string): Promise<boolean> => {
+  // EO-L01b: Toggle join open/closed
+  const toggleJoinOpen = useCallback(async (): Promise<boolean> => {
+    if (!socketRef.current) return false;
+    return new Promise(resolve => {
+      (socketRef.current as any).emit('session:toggle_join', (res: any) => {
+        if (res.error) {
+          setError(res.error);
+          setTimeout(() => setError(null), 3000);
+        }
+        resolve(res.success || false);
+      });
+    });
+  }, []);
+
     if (!socketRef.current) return false;
     return new Promise(resolve => {
       (socketRef.current as any).emit('session:lock_code', code, (res: any) => {
@@ -255,7 +269,7 @@ export function useSocket() {
     nightTarget, morningResult, voteUpdate, voteResult, messages,
     mafiaMessages, detectiveResult, detectiveHistory, doctorConfirm, detectiveConfirm,
     chatOpen, votingOpen, nightReadiness, gameOver, postGameStart, postGameUpdate, error,
-    createSession, joinSession, lockSessionCode,
+    createSession, joinSession, lockSessionCode, toggleJoinOpen,
     clearSavedSession: useCallback(() => { clearSavedSession(); setSession(null); sessionRef.current = null; }, []),
     initAudio: useCallback(async () => {
       await audioDirector.init();

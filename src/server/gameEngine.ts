@@ -160,6 +160,7 @@ export function createSession(hostPlayerId: string, socketId: string): { session
     postGameResponses: {}, postGameDeadline: null,
     hostDisconnectedAt: null,
     isCodeLocked: false,
+    isJoinOpen: true,
     createdAt: Date.now(),
   };
 
@@ -301,6 +302,8 @@ export function joinSession(code: string, playerName: string, playerId: string, 
   }
 
   // === NEW PLAYER ===
+  // Check if join is closed by host
+  if (!session.isJoinOpen) return { error: 'الانضمام مغلق — اطلب من المدير فتحه' };
   if (session.players.length >= 20) return { error: 'الجلسة ممتلئة' };
   if (session.players.some(p => p.name === playerName)) return { error: 'الاسم مستخدم' };
 
@@ -583,6 +586,23 @@ export function lockSessionCode(hostId: string, newCode: string): { success: boo
 
 // ============================================
 // Role Assignment
+// ============================================
+// EO-L01b: Toggle Join Open/Closed
+// ============================================
+
+export function toggleJoinOpen(hostId: string): { success: boolean; isJoinOpen?: boolean; error?: string } {
+  const result = verifyHost(hostId);
+  if ('error' in result) return { success: false, error: result.error };
+  const { session, sessionId } = result;
+
+  session.isJoinOpen = !session.isJoinOpen;
+  const state = session.isJoinOpen ? '🔓 OPEN' : '🔒 CLOSED';
+  console.log(`${state} [${session.code}] Join toggled by host`);
+
+  if (callbacks) callbacks.onSessionUpdated(sessionId, session);
+  return { success: true, isJoinOpen: session.isJoinOpen };
+}
+
 // ============================================
 
 function assignRoles(session: GameSession): void {

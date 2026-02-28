@@ -3,6 +3,14 @@
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
+// Clean old session data to prevent conflicts with new session
+function cleanOldSession() {
+  try {
+    localStorage.removeItem('doubt_session');
+    sessionStorage.removeItem('doubt_player_id');
+  } catch {}
+}
+
 export default function JoinPage() {
   const params = useParams();
   const router = useRouter();
@@ -11,6 +19,8 @@ export default function JoinPage() {
 
   const handleJoin = () => {
     if (name.trim() && code) {
+      // Clear old session cache so browser focuses on new link
+      cleanOldSession();
       router.push(`/play?code=${code}&name=${encodeURIComponent(name.trim())}`);
     }
   };
