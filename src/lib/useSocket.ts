@@ -236,8 +236,6 @@ export function useSocket() {
     });
   }, []);
 
-  // EO-L01: Lock session code
-  const lockSessionCode = useCallback(async (code: string): Promise<boolean> => {
   // EO-L01b: Toggle join open/closed
   const toggleJoinOpen = useCallback(async (): Promise<boolean> => {
     if (!socketRef.current) return false;
@@ -252,6 +250,8 @@ export function useSocket() {
     });
   }, []);
 
+  // EO-L01: Lock session code
+  const lockSessionCode = useCallback(async (code: string): Promise<boolean> => {
     if (!socketRef.current) return false;
     return new Promise(resolve => {
       (socketRef.current as any).emit('session:lock_code', code, (res: any) => {
