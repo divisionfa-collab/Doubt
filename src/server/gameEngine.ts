@@ -182,12 +182,11 @@ const HOST_GRACE_PERIOD_MS = 20000; // 20 seconds for host
 export function startGraceCleanupLoop(): void {
   setInterval(() => {
     sessions.forEach((session, sessionId) => {
-      // Check host grace period (20s for host)
+      // Host disconnect: NEVER destroy session — just reset timer and let host reconnect
       if (session.hostDisconnectedAt) {
         if (Date.now() - session.hostDisconnectedAt > HOST_GRACE_PERIOD_MS) {
-          console.log(`🗑️ [${session.code}] Host gone after grace period — destroying session`);
-          destroySession(sessionId);
-          return; // session destroyed, skip player checks
+          console.log(`⏳ [${session.code}] Host timeout — keeping session alive (${session.players.length} players)`);
+          session.hostDisconnectedAt = null; // Reset so we don't spam logs
         }
       }
 
@@ -204,6 +203,15 @@ export function startGraceCleanupLoop(): void {
       toRemove.forEach(pid => {
         removePlayerFully(sessionId, pid);
       });
+
+      // Only destroy if NO host AND NO players for 5 minutes
+      if (!session.hostDisconnectedAt && session.players.length === 0) {
+        const age = Date.now() - session.createdAt;
+        if (age > 5 * 60_000) {
+          console.log(`🗑️ [${session.code}] Empty session (no host, no players) — destroying`);
+          destroySession(sessionId);
+        }
+      }
     });
   }, 1000);
 }
