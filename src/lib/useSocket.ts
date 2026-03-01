@@ -17,45 +17,49 @@ const SOCKET_URL = typeof window !== 'undefined'
 
 type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-// EO-A01: Stable player identity
-// Host uses localStorage (persists across tabs for reconnect)
-// Players use sessionStorage (unique per tab for multi-player testing)
-function getStablePlayerId(forHost = false): string {
+// ============================================
+// EO-A01-HOTFIX: Stable Identity System
+// player_id في localStorage — لا يُمسح أبداً تلقائياً
+// ============================================
+
+const PID_KEY = 'doubt_player_id';
+const HOST_PID_KEY = 'doubt_host_id';
+const SESSION_KEY = 'doubt_session';
+
+function getOrCreatePlayerId(forHost = false): string {
   if (typeof window === 'undefined') return '';
-  
-  if (forHost) {
-    // Host: persistent across tabs
-    let id = localStorage.getItem('doubt_host_id');
-    if (!id) {
-      id = crypto.randomUUID();
-      localStorage.setItem('doubt_host_id', id);
-    }
-    return id;
-  }
-  
-  // Player: unique per tab (sessionStorage)
-  let id = sessionStorage.getItem('doubt_player_id');
+  const key = forHost ? HOST_PID_KEY : PID_KEY;
+  let id = localStorage.getItem(key);
   if (!id) {
     id = crypto.randomUUID();
-    sessionStorage.setItem('doubt_player_id', id);
+    localStorage.setItem(key, id);
   }
   return id;
 }
 
-// EO-A01: Save/restore session info for reconnect
-function saveSessionInfo(code: string, name: string, isHost: boolean) {
+function saveSession(code: string, name: string, isHost: boolean) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem('doubt_session', JSON.stringify({ code, name, isHost }));
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ code, name, isHost }));
 }
-function getSavedSession(): { code: string; name: string; isHost: boolean } | null {
+
+function loadSession(): { code: string; name: string; isHost: boolean } | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = localStorage.getItem('doubt_session');
+    const raw = localStorage.getItem(SESSION_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch { return null; }
 }
-function clearSavedSession() {
-  if (typeof window !== 'undefined') localStorage.removeItem('doubt_session');
+
+function clearSessionOnly() {
+  if (typeof window !== 'undefined') localStorage.removeItem(SESSION_KEY);
+}
+
+// Full logout — only called on explicit "خروج نهائي"
+function fullLogout() {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(PID_KEY);
+  localStorage.removeItem(HOST_PID_KEY);
+  localStorage.removeItem(SESSION_KEY);
 }
 
 export function useSocket() {
@@ -93,33 +97,32 @@ export function useSocket() {
     socket.on('connect', () => {
       setIsConnected(true); setError(null);
 
-      // EO-A01: Auto-reconnect if we have saved session
-      // Skip if session already exists (prevents reconnect loop)
+      // EO-A01-HOTFIX: Auto-reconnect from saved session
       if (sessionRef.current) return;
 
-      const saved = getSavedSession();
+      const saved = loadSession();
       if (!saved || reconnectingRef.current) return;
 
       reconnectingRef.current = true;
-      const stableId = getStablePlayerId(saved.isHost);
+      const pid = getOrCreatePlayerId(saved.isHost);
       if (saved.isHost) {
-        (socket as any).emit('session:create', stableId, (r: any) => {
+        (socket as any).emit('session:create', pid, (r: any) => {
           reconnectingRef.current = false;
           if (r.success && r.session) {
-            setSession(r.session); setPlayerId(stableId); setIsHost(true);
+            setSession(r.session); setPlayerId(pid); setIsHost(true);
             sessionRef.current = r.session;
           } else {
-            clearSavedSession();
+            clearSessionOnly();
           }
         });
       } else {
-        (socket as any).emit('session:join', saved.code, saved.name, stableId, (r: any) => {
+        (socket as any).emit('session:join', saved.code, saved.name, pid, (r: any) => {
           reconnectingRef.current = false;
           if (r.success && r.session) {
-            setSession(r.session); setPlayerId(stableId); setIsHost(false);
+            setSession(r.session); setPlayerId(pid); setIsHost(false);
             sessionRef.current = r.session;
           } else {
-            clearSavedSession();
+            clearSessionOnly();
           }
         });
       }
@@ -209,12 +212,12 @@ export function useSocket() {
   const createSession = useCallback(async (): Promise<boolean> => {
     return new Promise((resolve) => {
       if (!socketRef.current) { setError('غير متصل'); resolve(false); return; }
-      const stableId = getStablePlayerId(true);
-      (socketRef.current as any).emit('session:create', stableId, (r: SessionResponse) => {
+      const pid = getOrCreatePlayerId(true);
+      (socketRef.current as any).emit('session:create', pid, (r: SessionResponse) => {
         if (r.success && r.session) {
-          setSession(r.session); setPlayerId(r.playerId || stableId); setIsHost(true); setError(null);
+          setSession(r.session); setPlayerId(r.playerId || pid); setIsHost(true); setError(null);
           sessionRef.current = r.session;
-          saveSessionInfo(r.session.code, '__HOST__', true);
+          saveSession(r.session.code, '__HOST__', true);
           resolve(true);
         } else { setError(r.error || 'فشل'); resolve(false); }
       });
@@ -224,12 +227,12 @@ export function useSocket() {
   const joinSession = useCallback(async (code: string, playerName: string): Promise<boolean> => {
     return new Promise((resolve) => {
       if (!socketRef.current) { setError('غير متصل'); resolve(false); return; }
-      const stableId = getStablePlayerId();
-      (socketRef.current as any).emit('session:join', code, playerName, stableId, (r: SessionResponse) => {
+      const pid = getOrCreatePlayerId();
+      (socketRef.current as any).emit('session:join', code, playerName, pid, (r: SessionResponse) => {
         if (r.success && r.session) {
-          setSession(r.session); setPlayerId(r.playerId || stableId); setIsHost(false); setError(null);
+          setSession(r.session); setPlayerId(r.playerId || pid); setIsHost(false); setError(null);
           sessionRef.current = r.session;
-          saveSessionInfo(code, playerName, false);
+          saveSession(code, playerName, false);
           resolve(true);
         } else { setError(r.error || 'فشل'); resolve(false); }
       });
@@ -270,7 +273,7 @@ export function useSocket() {
     mafiaMessages, detectiveResult, detectiveHistory, doctorConfirm, detectiveConfirm,
     chatOpen, votingOpen, nightReadiness, gameOver, postGameStart, postGameUpdate, error,
     createSession, joinSession, lockSessionCode, toggleJoinOpen,
-    clearSavedSession: useCallback(() => { clearSavedSession(); setSession(null); sessionRef.current = null; }, []),
+    clearSavedSession: useCallback(() => { clearSessionOnly(); setSession(null); sessionRef.current = null; }, []),
     initAudio: useCallback(async () => {
       await audioDirector.init();
       await audioDirector.resume();

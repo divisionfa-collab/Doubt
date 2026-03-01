@@ -42,8 +42,16 @@ export default function HomePage() {
           <button
             onClick={() => {
               if (name.trim() && code.trim()) {
-                // Clean old session cache
-                try { localStorage.removeItem('doubt_session'); sessionStorage.removeItem('doubt_player_id'); } catch {}
+                // EO-A01-HOTFIX: Clear session data only, NEVER player_id
+                try {
+                  const saved = localStorage.getItem('doubt_session');
+                  if (saved) {
+                    const parsed = JSON.parse(saved);
+                    if (parsed.code !== code) {
+                      localStorage.removeItem('doubt_session');
+                    }
+                  }
+                } catch { localStorage.removeItem('doubt_session'); }
                 router.push(`/play?code=${code}&name=${encodeURIComponent(name.trim())}`);
               }
             }}

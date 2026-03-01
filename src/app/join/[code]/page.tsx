@@ -3,12 +3,19 @@
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
-// Clean old session data to prevent conflicts with new session
-function cleanOldSession() {
+// EO-A01-HOTFIX: Only clear session data for DIFFERENT session, NEVER touch player_id
+function prepareForJoin(currentCode: string) {
   try {
+    const saved = localStorage.getItem('doubt_session');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.code !== currentCode) {
+        localStorage.removeItem('doubt_session');
+      }
+    }
+  } catch {
     localStorage.removeItem('doubt_session');
-    sessionStorage.removeItem('doubt_player_id');
-  } catch {}
+  }
 }
 
 export default function JoinPage() {
@@ -20,7 +27,7 @@ export default function JoinPage() {
   const handleJoin = () => {
     if (name.trim() && code) {
       // Clear old session cache so browser focuses on new link
-      cleanOldSession();
+      prepareForJoin(code);
       router.push(`/play?code=${code}&name=${encodeURIComponent(name.trim())}`);
     }
   };
