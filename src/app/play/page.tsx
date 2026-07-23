@@ -116,7 +116,7 @@ function PlayContent() {
     if (!code || !playerName) return;
 
     let attempt = 0;
-    const maxRetries = 3;
+    const maxRetries = 5;
     const retryDelay = 1500;
 
     const tryJoin = () => {
@@ -383,6 +383,10 @@ function PlayContent() {
 
   // POST_GAME - Continue/Exit choice
   if (session.phase === GamePhase.POST_GAME && postGameStart) {
+    // Read choice from server (auto-continued spectators will already have 'continue')
+    const serverChoice = playerId ? session.postGameResponses?.[playerId] : null;
+    const effectiveChoice = postGameChoice || serverChoice || null;
+
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4 phase-lobby">
         <div className="text-center animate-fade-in max-w-sm w-full">
@@ -392,7 +396,7 @@ function PlayContent() {
             الفائز: {postGameStart.winnerName}
           </p>
 
-          {!postGameChoice ? (
+          {!effectiveChoice ? (
             <>
               <p className="text-doubt-muted text-sm mb-4">هل ترغب في جولة جديدة؟</p>
               <div className="space-y-3 mb-6">
@@ -409,13 +413,13 @@ function PlayContent() {
             </>
           ) : (
             <div className="animate-fade-in">
-              <div className={`text-5xl mb-4 ${postGameChoice === 'continue' ? '' : ''}`}>
-                {postGameChoice === 'continue' ? '✅' : '👋'}
+              <div className={`text-5xl mb-4 ${effectiveChoice === 'continue' ? '' : ''}`}>
+                {effectiveChoice === 'continue' ? '✅' : '👋'}
               </div>
               <p className="text-doubt-muted text-lg mb-2">
-                {postGameChoice === 'continue' ? 'تم تسجيل اختيارك' : 'شكراً لمشاركتك!'}
+                {effectiveChoice === 'continue' ? 'تم تسجيل اختيارك' : 'شكراً لمشاركتك!'}
               </p>
-              {postGameChoice === 'continue' && (
+              {effectiveChoice === 'continue' && (
                 <p className="text-doubt-muted/50 text-xs">في انتظار المدير...</p>
               )}
               {postGameUpdate && (
@@ -428,7 +432,7 @@ function PlayContent() {
                   </p>
                 </div>
               )}
-              {postGameChoice === 'exit' && (
+              {effectiveChoice === 'exit' && (
                 <button onClick={() => router.push('/')} className="mt-4 w-full py-3 bg-doubt-accent rounded-xl font-bold">
                   🏠 خروج
                 </button>

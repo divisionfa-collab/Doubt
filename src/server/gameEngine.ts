@@ -415,8 +415,20 @@ export function joinSession(code: string, playerName: string, playerId: string, 
   // === NEW PLAYER ===
   // Check if join is closed by host
   if (!session.isJoinOpen) return { error: 'الانضمام مغلق — اطلب من المدير فتحه' };
-  if (session.players.length >= 20) return { error: 'الجلسة ممتلئة' };
-  if (session.players.some(p => p.name === playerName)) return { error: 'الاسم مستخدم' };
+  if (session.players.length >= 20) return { error: 'الجلسة ممتلئة (20 كحد أقصى)' };
+  if (session.players.some(p => p.name === playerName)) {
+    // Auto-suffix duplicate names instead of rejecting
+    let suffix = 2;
+    let newName = `${playerName}${suffix}`;
+    while (session.players.some(p => p.name === newName)) {
+      suffix++;
+      newName = `${playerName}${suffix}`;
+    }
+    playerName = newName;
+    console.log(`⚠️ [${session.code}] Name conflict — using "${playerName}"`);
+  }
+
+  console.log(`🔍 [${session.code}] JOIN attempt: name="${playerName}" pid=${playerId.slice(0,8)} phase=${session.phase} started=${session.isStarted} gameOver=${session.isGameOver}`);
 
   // EO-L02: الانضمام أثناء جولة جارية = مشاهد (isAlive=false, role=null)
   if (session.isStarted && !session.isGameOver) {
@@ -646,10 +658,19 @@ export function hostRestartGame(hostId: string): { success: boolean; error?: str
   if (!session.isGameOver && session.phase !== GamePhase.GAME_OVER) return { success: false, error: 'اللعبة لم تنتهِ بعد' };
 
   // Enter POST_GAME phase
-  const duration = 20; // seconds
+  const duration = 20; // seconds (kept for backward compat with client display)
   session.phase = GamePhase.POST_GAME;
   session.postGameResponses = {};
   session.postGameDeadline = Date.now() + duration * 1000;
+  session.isJoinOpen = true; // Force open — new friends can always join between rounds
+
+  // Auto-continue spectators (mid-round joiners, no role) — they clearly want to play
+  session.players.forEach(p => {
+    if (!p.role && p.isConnected) {
+      session.postGameResponses[p.id] = 'continue';
+      console.log(`✅ [${session.code}] ${p.name} auto-continued (mid-round spectator)`);
+    }
+  });
 
   const winnerStr = session.winResult === 'MAFIA_WIN' ? 'MAFIA' : 'CITIZENS';
   const winnerName = session.winResult === 'MAFIA_WIN' ? '🔪 المافيا' : '🏘️ المدنيون';
