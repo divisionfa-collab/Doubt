@@ -590,7 +590,7 @@ function PlayContent() {
         <div className={`mx-3 mt-2 px-4 py-2 rounded-xl text-sm font-bold text-center animate-fade-in shrink-0 ${
           detectiveResult.isMafia ? 'bg-red-900/90 text-red-200' : 'bg-purple-900/90 text-purple-200'
         }`}>
-          🕵️ {detectiveResult.targetName}: {detectiveResult.isMafia ? '⚠️ عضو عصابة!' : '✅ بريء'}
+          🕵️ {detectiveResult.targetName}: {detectiveResult.isMafia ? '⚠️ احتمال أن يكون من المافيا — يجب عليك التحقق' : '🤔 لا يبدو مشبوهاً — لكن تأكّد بنفسك'}
         </div>
       )}
 
@@ -600,7 +600,7 @@ function PlayContent() {
           <h4 className="text-purple-400 text-xs font-bold mb-2">🕵️ سجل الفحوصات</h4>
           {detectiveHistory.map((r, i) => (
             <div key={i} className={`text-xs p-1.5 rounded mb-1 ${r.isMafia ? 'bg-red-500/10 text-red-300' : 'bg-green-500/10 text-green-300'}`}>
-              {r.targetName}: {r.isMafia ? '⚠️ مافيا' : '✅ بريء'}
+              {r.targetName}: {r.isMafia ? '⚠️ مشبوه — تحقّق' : '🤔 يبدو نظيفاً'}
             </div>
           ))}
         </div>

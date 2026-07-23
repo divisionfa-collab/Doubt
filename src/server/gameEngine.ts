@@ -161,6 +161,7 @@ export function createSession(hostPlayerId: string, socketId: string): { session
     hostDisconnectedAt: null,
     isCodeLocked: false,
     isJoinOpen: true,
+    roleHistory: {},
     createdAt: Date.now(),
   };
 
@@ -176,8 +177,98 @@ export function createSession(hostPlayerId: string, socketId: string): { session
 // Grace Period Cleanup (runs every second)
 // ============================================
 
-const GRACE_PERIOD_MS = 15000; // 15 seconds
-const HOST_GRACE_PERIOD_MS = 20000; // 20 seconds for host
+const GRACE_PERIOD_MS = 15000; // LOBBY only
+const HOST_GRACE_PERIOD_MS = 20000;
+const SPECIAL_ROLE_TRANSFER_MS = 60000; // 60s → نقل دور المقطوع
+
+// هل هذا اللاعب المقطوع يُعطّل مرحلة الليل حالياً؟
+function isPlayerBlockingNight(session: GameSession, player: Player): boolean {
+  if (session.phase !== GamePhase.NIGHT) return false;
+  if (!player.role || player.role === PlayerRole.CITIZEN) return false;
+  if (!player.isAlive) return false;
+
+  if (player.role === PlayerRole.MAFIA) {
+    // فقط إذا لم يُختر الهدف بعد
+    if (session.nightActions.mafiaTarget !== null) return false;
+    // معطّل فقط إذا لا يوجد مافيا آخر متصل حي يقدر يختار
+    const otherActiveMafia = session.players.some(p =>
+      p.role === PlayerRole.MAFIA && p.id !== player.id && p.isConnected && p.isAlive
+    );
+    return !otherActiveMafia;
+  }
+  if (player.role === PlayerRole.DOCTOR) {
+    return session.nightActions.doctorProtect === null;
+  }
+  if (player.role === PlayerRole.DETECTIVE) {
+    return session.nightActions.detectiveCheck === null;
+  }
+  return false;
+}
+
+// نقل دور خاص من لاعب مقطوع إلى مدني حي متصل
+function transferDisconnectedRole(sessionId: string, fromPlayerId: string): boolean {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+
+  const fromPlayer = session.players.find(p => p.id === fromPlayerId);
+  if (!fromPlayer || !fromPlayer.role) return false;
+
+  const originalRole = fromPlayer.role;
+  if (originalRole === PlayerRole.CITIZEN) return false;
+
+  // مرشحون: مدنيون أحياء متصلون (غير المقطوع نفسه)
+  const candidates = session.players.filter(p =>
+    p.id !== fromPlayerId &&
+    p.isAlive &&
+    p.isConnected &&
+    p.role === PlayerRole.CITIZEN
+  );
+  if (candidates.length === 0) return false;
+
+  // اختيار عشوائي بين المرشحين
+  const newHolder = candidates[Math.floor(Math.random() * candidates.length)];
+
+  // تبديل: المقطوع → CITIZEN، الجديد → الدور الخاص
+  fromPlayer.role = PlayerRole.CITIZEN;
+  newHolder.role = originalRole;
+
+  // تحديث سجل الأدوار لهذه الجولة
+  const fromHist = session.roleHistory[fromPlayer.id];
+  const newHist = session.roleHistory[newHolder.id];
+  if (fromHist && fromHist.length > 0) fromHist[fromHist.length - 1] = PlayerRole.CITIZEN;
+  if (newHist && newHist.length > 0) newHist[newHist.length - 1] = originalRole;
+
+  console.log(`🔄 [${session.code}] Role transfer: ${originalRole} → ${newHolder.name} (from disconnected ${fromPlayer.name})`);
+
+  if (callbacks) {
+    if (originalRole === PlayerRole.MAFIA) {
+      // إعادة إرسال قائمة الشركاء لكل المافيا (المتصلين الأحياء)
+      const allMafiaNames = session.players.filter(p => p.role === PlayerRole.MAFIA).map(p => p.name);
+      session.players.forEach(p => {
+        if (p.role === PlayerRole.MAFIA && p.isConnected && p.isAlive) {
+          const teammates = allMafiaNames.filter(n => n !== p.name);
+          callbacks!.onRoleAssigned(p.id, { role: PlayerRole.MAFIA, teammates });
+        }
+      });
+    } else {
+      // طبيب / محقق — دور فردي، فقط إشعار الحامل الجديد
+      callbacks.onRoleAssigned(newHolder.id, { role: originalRole, teammates: [] });
+    }
+
+    // تحديث كامل قائمة الأدوار للمدير
+    const allRoles = session.players.map(p => ({ name: p.name, role: p.role! }));
+    callbacks.onRoleAssigned(session.hostId, {
+      role: PlayerRole.CITIZEN,
+      teammates: allRoles.map(r => `${r.name}:${r.role}`),
+    });
+
+    // تحديث حالة جاهزية الليل للمدير + إبلاغ عام
+    sendNightReadiness(sessionId);
+    callbacks.onSessionUpdated(sessionId, session);
+  }
+
+  return true;
+}
 
 export function startGraceCleanupLoop(): void {
   setInterval(() => {
@@ -190,13 +281,23 @@ export function startGraceCleanupLoop(): void {
         }
       }
 
-      // Check player grace periods (15s)
+      const isActiveGame = session.isStarted && !session.isGameOver;
+
       const toRemove: string[] = [];
       session.players.forEach(player => {
-        if (!player.isConnected && player.disconnectedAt) {
-          if (Date.now() - player.disconnectedAt > GRACE_PERIOD_MS) {
-            toRemove.push(player.id);
-          }
+        if (player.isConnected || !player.disconnectedAt) return;
+        const offlineMs = Date.now() - player.disconnectedAt;
+
+        if (!isActiveGame) {
+          // اللوبي / post-game: إخراج بعد 15 ثانية (كالسابق)
+          if (offlineMs > GRACE_PERIOD_MS) toRemove.push(player.id);
+          return;
+        }
+
+        // اللعبة شغّالة: لا نُخرج أبداً — يقدر يرجع أي وقت
+        // إذا مقطوع >60 ثانية ويعطّل الليل → نقل الدور
+        if (offlineMs > SPECIAL_ROLE_TRANSFER_MS && isPlayerBlockingNight(session, player)) {
+          transferDisconnectedRole(sessionId, player.id);
         }
       });
 
@@ -228,8 +329,9 @@ function removePlayerFully(sessionId: string, playerId: string): void {
   const sock = playerToSocket.get(playerId);
   if (sock) { socketToPlayer.delete(sock); playerToSocket.delete(playerId); }
 
-  // Remove from session
+  // Remove from session + clean role history
   session.players = session.players.filter(p => p.id !== playerId);
+  delete session.roleHistory[playerId];
   console.log(`🗑️ [${session.code}] ${playerName} removed after grace period (${session.players.length} left)`);
 
   // Broadcast player:left + session update
@@ -615,11 +717,66 @@ export function toggleJoinOpen(hostId: string): { success: boolean; isJoinOpen?:
 
 function assignRoles(session: GameSession): void {
   const roles = getRoleDistribution(session.players.length);
-  const shuffledRoles = shuffle(roles);
 
-  session.players.forEach((player, index) => {
-    player.role = shuffledRoles[index];
+  // تهيئة سجل الأدوار للاعبين الجدد
+  session.players.forEach(p => {
+    if (!session.roleHistory[p.id]) session.roleHistory[p.id] = [];
+  });
+
+  // حساب عدد كل دور مطلوب
+  const roleCounts: Record<string, number> = {};
+  roles.forEach(r => { roleCounts[r] = (roleCounts[r] || 0) + 1; });
+
+  // ترتيب الأدوار حسب الأهمية (الأندر أولاً — المافيا هي الأكثر رغبة)
+  const priorityOrder: PlayerRole[] = [PlayerRole.MAFIA, PlayerRole.DETECTIVE, PlayerRole.DOCTOR];
+
+  const assignments: Record<string, PlayerRole> = {};
+  const available = new Set(session.players.map(p => p.id));
+
+  // لكل دور خاص، اختر أفضل مرشحين حسب سجل الأدوار
+  for (const roleType of priorityOrder) {
+    const needed = roleCounts[roleType] || 0;
+    if (needed === 0) continue;
+
+    // نقاط كل لاعب متاح لهذا الدور:
+    // 1) اللي ما جاه هذا الدور أبداً = أعلى أولوية
+    // 2) اللي مرّت عليه جولات أكثر منذ آخر مرة = أولوية أعلى
+    // 3) اللي أخذ الدور عدد مرات أقل = أولوية أعلى
+    // 4) عامل عشوائي صغير للفصل بين المتساويين
+    const scored = Array.from(available).map(pid => {
+      const hist = session.roleHistory[pid] || [];
+      const totalCount = hist.filter(r => r === roleType).length;
+      const lastIdx = hist.lastIndexOf(roleType);
+      const roundsSince = lastIdx === -1 ? Number.MAX_SAFE_INTEGER : hist.length - lastIdx;
+      return { pid, neverHad: lastIdx === -1, roundsSince, totalCount, random: Math.random() };
+    });
+
+    scored.sort((a, b) => {
+      // الأولوية 1: من لم يأخذ الدور أبداً
+      if (a.neverHad !== b.neverHad) return a.neverHad ? -1 : 1;
+      // الأولوية 2: من مرّت عليه جولات أكثر منذ آخر مرة
+      if (a.roundsSince !== b.roundsSince) return b.roundsSince - a.roundsSince;
+      // الأولوية 3: من أخذ الدور مرات أقل
+      if (a.totalCount !== b.totalCount) return a.totalCount - b.totalCount;
+      // الأولوية 4: عشوائي للفصل
+      return a.random - b.random;
+    });
+
+    // خذ أفضل N للدور
+    for (let i = 0; i < needed && i < scored.length; i++) {
+      assignments[scored[i].pid] = roleType;
+      available.delete(scored[i].pid);
+    }
+  }
+
+  // الباقي = مدنيون
+  available.forEach(pid => { assignments[pid] = PlayerRole.CITIZEN; });
+
+  // تطبيق الأدوار + تحديث السجل
+  session.players.forEach(player => {
+    player.role = assignments[player.id];
     player.isAlive = true;
+    session.roleHistory[player.id].push(player.role!);
   });
 
   const mafiaNames = session.players.filter(p => p.role === PlayerRole.MAFIA).map(p => p.name);
@@ -646,7 +803,7 @@ function assignRoles(session: GameSession): void {
     const icons: Record<string, string> = { MAFIA: '🔪', CITIZEN: '🏘️', DOCTOR: '🩺', DETECTIVE: '🕵️' };
     return `${icons[p.role!] || '?'} ${p.name}`;
   }).join(' | ');
-  console.log(`🎭 Roles: ${roleLog}`);
+  console.log(`🎭 Roles (fair rotation): ${roleLog}`);
 }
 
 // ============================================
@@ -1107,6 +1264,8 @@ function resolvePostGame(sessionId: string): void {
     // Clean up socket maps
     const sid = playerToSocket.get(p.id);
     if (sid) { socketToPlayer.delete(sid); playerToSocket.delete(p.id); }
+    // Clean role history for exiters (fresh start if they rejoin)
+    delete session.roleHistory[p.id];
     console.log(`❌ [${session.code}] ${p.name} exited post-game`);
   });
 

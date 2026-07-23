@@ -60,6 +60,7 @@ function HostContent() {
   const [hasCreated, setHasCreated] = useState(false);
   const [promptText, setPromptText] = useState('');
   const [copied, setCopied] = useState(false);
+  const [showQR, setShowQR] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [customCode, setCustomCode] = useState('');
@@ -121,6 +122,7 @@ function HostContent() {
         document.body.removeChild(ta);
       }
       setCopied(true);
+      setShowQR(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
       prompt('انسخ الرابط:', url);
@@ -709,6 +711,39 @@ function HostContent() {
           </div>
         </div>
       </div>
+
+      {showQR && session && (
+        <div
+          onClick={() => setShowQR(false)}
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#1a1a20] border border-doubt-gold/30 rounded-2xl p-6 max-w-sm w-full text-center relative"
+          >
+            <button
+              onClick={() => setShowQR(false)}
+              className="absolute top-3 left-3 w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-white/60"
+              aria-label="إغلاق"
+            >
+              ✕
+            </button>
+            <p className="text-doubt-gold text-sm font-bold mb-1">📱 امسح للانضمام</p>
+            <p className="text-doubt-muted text-xs mb-4">مرّر الجوال للاعبين لمسح الكود</p>
+            <div className="bg-white p-3 rounded-xl inline-block mb-4">
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data=${encodeURIComponent(`${window.location.origin}/join/${session.code}`)}`}
+                alt="QR Code"
+                width={260}
+                height={260}
+                className="block"
+              />
+            </div>
+            <p className="text-doubt-gold font-mono text-lg tracking-[0.3em] mb-1">{session.code}</p>
+            <p className="text-doubt-muted/60 text-[10px] break-all">{`${window.location.origin}/join/${session.code}`}</p>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-doubt-accent/90 px-4 py-2 rounded-xl text-sm z-50">

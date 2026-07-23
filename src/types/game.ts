@@ -40,7 +40,7 @@ export const MAX_MAFIA_MESSAGES = 3;
  * توزيع الأدوار:
  * < 10 لاعبين: 1 مافيا
  * >= 10 لاعبين: 2 مافيا
- * >= 4: + محقق
+ * >= 15: + محقق
  * >= 6: + طبيب
  */
 export function getRoleDistribution(playerCount: number): PlayerRole[] {
@@ -48,7 +48,7 @@ export function getRoleDistribution(playerCount: number): PlayerRole[] {
   const roles: PlayerRole[] = Array(mafiaCount).fill(PlayerRole.MAFIA);
 
   if (playerCount >= 6) roles.push(PlayerRole.DOCTOR);
-  if (playerCount >= 4) roles.push(PlayerRole.DETECTIVE);
+  if (playerCount >= 15) roles.push(PlayerRole.DETECTIVE);
 
   while (roles.length < playerCount) roles.push(PlayerRole.CITIZEN);
   return roles;
@@ -145,6 +145,8 @@ export interface GameSession {
   hostDisconnectedAt: number | null;
   isCodeLocked: boolean;
   isJoinOpen: boolean;
+  /** تاريخ الأدوار لكل لاعب عبر الجولات — للدوران العادل */
+  roleHistory: Record<string, PlayerRole[]>;
   createdAt: number;
 }
 
