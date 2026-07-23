@@ -282,20 +282,19 @@ export function startGraceCleanupLoop(): void {
       }
 
       const isActiveGame = session.isStarted && !session.isGameOver;
-      const isPostGame = session.phase === GamePhase.POST_GAME;
 
       const toRemove: string[] = [];
       session.players.forEach(player => {
         if (player.isConnected || !player.disconnectedAt) return;
         const offlineMs = Date.now() - player.disconnectedAt;
 
-        if (!isActiveGame && !isPostGame) {
-          // اللوبي فقط: إخراج بعد 15 ثانية (كالسابق)
+        if (!isActiveGame) {
+          // اللوبي / post-game: إخراج بعد 15 ثانية (كالسابق)
           if (offlineMs > GRACE_PERIOD_MS) toRemove.push(player.id);
           return;
         }
 
-        // اللعبة شغّالة أو POST_GAME: لا نُخرج أبداً — يقدر يرجع أي وقت
+        // اللعبة شغّالة: لا نُخرج أبداً — يقدر يرجع أي وقت
         // إذا مقطوع >60 ثانية ويعطّل الليل → نقل الدور
         if (offlineMs > SPECIAL_ROLE_TRANSFER_MS && isPlayerBlockingNight(session, player)) {
           transferDisconnectedRole(sessionId, player.id);
@@ -415,20 +414,8 @@ export function joinSession(code: string, playerName: string, playerId: string, 
   // === NEW PLAYER ===
   // Check if join is closed by host
   if (!session.isJoinOpen) return { error: 'الانضمام مغلق — اطلب من المدير فتحه' };
-  if (session.players.length >= 20) return { error: 'الجلسة ممتلئة (20 كحد أقصى)' };
-  if (session.players.some(p => p.name === playerName)) {
-    // Auto-suffix duplicate names instead of rejecting
-    let suffix = 2;
-    let newName = `${playerName}${suffix}`;
-    while (session.players.some(p => p.name === newName)) {
-      suffix++;
-      newName = `${playerName}${suffix}`;
-    }
-    playerName = newName;
-    console.log(`⚠️ [${session.code}] Name conflict — using "${playerName}"`);
-  }
-
-  console.log(`🔍 [${session.code}] JOIN attempt: name="${playerName}" pid=${playerId.slice(0,8)} phase=${session.phase} started=${session.isStarted} gameOver=${session.isGameOver}`);
+  if (session.players.length >= 20) return { error: 'الجلسة ممتلئة' };
+  if (session.players.some(p => p.name === playerName)) return { error: 'الاسم مستخدم' };
 
   // EO-L02: الانضمام أثناء جولة جارية = مشاهد (isAlive=false, role=null)
   if (session.isStarted && !session.isGameOver) {
@@ -456,15 +443,6 @@ export function joinSession(code: string, playerName: string, playerId: string, 
   session.players.push(player);
   playerToSession.set(playerId, sessionId);
   mapSocket(socketId, playerId);
-
-  // إذا انضم أثناء POST_GAME (بين الجولات) → اعتبره "مستمر" تلقائياً
-  if (session.phase === GamePhase.POST_GAME) {
-    session.postGameResponses[playerId] = 'continue';
-    console.log(`✅ [${session.code}] ${playerName} auto-continued (joined during post-game)`);
-    // إشعار المدير بتحديث العدّاد
-    if (callbacks) callbacks.onPostGameUpdate(sessionId, getPostGameUpdate(session));
-  }
-
   console.log(`👤 ${playerName} joined ${code} (${session.players.length} players, pid: ${playerId})`);
   return { session, player };
 }
@@ -658,19 +636,10 @@ export function hostRestartGame(hostId: string): { success: boolean; error?: str
   if (!session.isGameOver && session.phase !== GamePhase.GAME_OVER) return { success: false, error: 'اللعبة لم تنتهِ بعد' };
 
   // Enter POST_GAME phase
-  const duration = 20; // seconds (kept for backward compat with client display)
+  const duration = 20; // seconds
   session.phase = GamePhase.POST_GAME;
   session.postGameResponses = {};
   session.postGameDeadline = Date.now() + duration * 1000;
-  session.isJoinOpen = true; // Force open — new friends can always join between rounds
-
-  // Auto-continue spectators (mid-round joiners, no role) — they clearly want to play
-  session.players.forEach(p => {
-    if (!p.role && p.isConnected) {
-      session.postGameResponses[p.id] = 'continue';
-      console.log(`✅ [${session.code}] ${p.name} auto-continued (mid-round spectator)`);
-    }
-  });
 
   const winnerStr = session.winResult === 'MAFIA_WIN' ? 'MAFIA' : 'CITIZENS';
   const winnerName = session.winResult === 'MAFIA_WIN' ? '🔪 المافيا' : '🏘️ المدنيون';
@@ -688,7 +657,8 @@ export function hostRestartGame(hostId: string): { success: boolean; error?: str
     callbacks.onSessionUpdated(sessionId, session);
   }
 
-  // No auto-resolve timer — host controls when to start new round
+  // Server-authoritative timer: auto-resolve after deadline
+  setTimeout(() => resolvePostGame(sessionId), duration * 1000);
 
   return { success: true };
 }
@@ -1275,7 +1245,11 @@ export function postGameRespond(playerId: string, choice: 'continue' | 'exit'): 
     callbacks.onPostGameUpdate(sessionId, update);
   }
 
-  // No auto-resolve — host decides when to move on, regardless of who responded
+  // If all responded, resolve immediately
+  if (Object.keys(session.postGameResponses).length >= session.players.length) {
+    resolvePostGame(sessionId);
+  }
+
   return { success: true };
 }
 
@@ -1296,9 +1270,9 @@ function resolvePostGame(sessionId: string): void {
   const session = sessions.get(sessionId);
   if (!session || session.phase !== GamePhase.POST_GAME) return;
 
-  // أي شخص لم يستجب = خروج. المقطوعين اللي اختاروا "استمر" يبقون (يقدرون يرجعون)
+  // Anyone who didn't respond OR is disconnected = exit
   session.players.forEach(p => {
-    if (!session.postGameResponses[p.id]) {
+    if (!session.postGameResponses[p.id] || !p.isConnected) {
       session.postGameResponses[p.id] = 'exit';
     }
   });
@@ -1358,11 +1332,5 @@ export function hostStartNewRound(hostId: string): { success: boolean; error?: s
   if (session.phase !== GamePhase.POST_GAME) return { success: false, error: 'ليست مرحلة ما بعد اللعبة' };
 
   resolvePostGame(sessionId);
-
-  // بعد resolvePostGame الجلسة صارت LOBBY. لو فيه لاعبين ≥2 نبدأ الجولة مباشرة
-  const s = sessions.get(sessionId);
-  if (s && s.players.length >= 2) {
-    return startGame(hostId);
-  }
   return { success: true };
 }

@@ -211,6 +211,7 @@ function HostContent() {
 
   // POST_GAME - Host dashboard: see who continues/exits
   if (currentPhase === GamePhase.POST_GAME && postGameStart) {
+    const deadline = postGameStart.deadline;
     const continueCount = postGameUpdate?.continueCount || 0;
     const exitCount = postGameUpdate?.exitCount || 0;
     const pending = session.players.length - continueCount - exitCount;
@@ -269,6 +270,7 @@ function HostContent() {
             <span className="text-green-400">✅ {continueCount}</span>
             <span className="text-red-400">❌ {exitCount}</span>
             <span className="text-doubt-muted">⏳ {pending}</span>
+            <PostGameTimerHost deadline={deadline} />
           </div>
 
           {/* Action Buttons */}

@@ -116,7 +116,7 @@ function PlayContent() {
     if (!code || !playerName) return;
 
     let attempt = 0;
-    const maxRetries = 5;
+    const maxRetries = 3;
     const retryDelay = 1500;
 
     const tryJoin = () => {
@@ -383,9 +383,8 @@ function PlayContent() {
 
   // POST_GAME - Continue/Exit choice
   if (session.phase === GamePhase.POST_GAME && postGameStart) {
-    // Read choice from server (auto-continued spectators will already have 'continue')
-    const serverChoice = playerId ? session.postGameResponses?.[playerId] : null;
-    const effectiveChoice = postGameChoice || serverChoice || null;
+    const deadline = postGameStart.deadline;
+    const secondsLeft = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
 
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4 phase-lobby">
@@ -396,7 +395,7 @@ function PlayContent() {
             الفائز: {postGameStart.winnerName}
           </p>
 
-          {!effectiveChoice ? (
+          {!postGameChoice ? (
             <>
               <p className="text-doubt-muted text-sm mb-4">هل ترغب في جولة جديدة؟</p>
               <div className="space-y-3 mb-6">
@@ -409,18 +408,18 @@ function PlayContent() {
                   ❌ أعتذر
                 </button>
               </div>
-              <p className="text-doubt-muted text-xs mt-3">في انتظار المدير لبدء الجولة الجديدة...</p>
+              <PostGameTimer deadline={deadline} />
             </>
           ) : (
             <div className="animate-fade-in">
-              <div className={`text-5xl mb-4 ${effectiveChoice === 'continue' ? '' : ''}`}>
-                {effectiveChoice === 'continue' ? '✅' : '👋'}
+              <div className={`text-5xl mb-4 ${postGameChoice === 'continue' ? '' : ''}`}>
+                {postGameChoice === 'continue' ? '✅' : '👋'}
               </div>
               <p className="text-doubt-muted text-lg mb-2">
-                {effectiveChoice === 'continue' ? 'تم تسجيل اختيارك' : 'شكراً لمشاركتك!'}
+                {postGameChoice === 'continue' ? 'تم تسجيل اختيارك' : 'شكراً لمشاركتك!'}
               </p>
-              {effectiveChoice === 'continue' && (
-                <p className="text-doubt-muted/50 text-xs">في انتظار المدير...</p>
+              {postGameChoice === 'continue' && (
+                <p className="text-doubt-muted/50 text-xs">في انتظار البقية...</p>
               )}
               {postGameUpdate && (
                 <div className="mt-4 bg-white/5 rounded-xl p-3">
@@ -432,27 +431,13 @@ function PlayContent() {
                   </p>
                 </div>
               )}
-              {effectiveChoice === 'exit' && (
+              {postGameChoice === 'exit' && (
                 <button onClick={() => router.push('/')} className="mt-4 w-full py-3 bg-doubt-accent rounded-xl font-bold">
                   🏠 خروج
                 </button>
               )}
             </div>
           )}
-        </div>
-      </div>
-    );
-  }
-
-  // POST_GAME - new joiner (no postGameStart yet) → waiting UI
-  if (session.phase === GamePhase.POST_GAME) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4 phase-lobby">
-        <div className="text-center animate-fade-in">
-          <div className="text-6xl mb-4">🎬</div>
-          <p className="text-2xl font-bold text-doubt-gold mb-2">في انتظار الجولة الجديدة</p>
-          <p className="text-doubt-muted text-sm mb-4">المدير على وشك بدء اللعبة...</p>
-          <p className="text-doubt-gold text-lg">{playerName}</p>
         </div>
       </div>
     );
