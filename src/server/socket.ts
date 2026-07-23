@@ -125,8 +125,13 @@ export function setupSocketServer(io: Server<ClientToServerEvents, ServerToClien
         io.to(session.id).emit('session:updated', sanitizeSession(session));
         // Re-deliver role if reconnecting during active game
         if (reconnected && session.isStarted && player.role) {
+          // Compute teammates for mafia (other mafia names)
+          const teammates = player.role === 'MAFIA'
+            ? session.players.filter(p => p.role === 'MAFIA' && p.id !== player.id).map(p => p.name)
+            : [];
           socket.emit('role:assigned', {
             role: player.role,
+            teammates,
             description: player.role === 'MAFIA' ? 'أنت المافيا! اقتل المدنيين سراً'
               : player.role === 'DOCTOR' ? 'أنت الطبيب! أنقذ حياة واحدة كل ليلة'
               : player.role === 'DETECTIVE' ? 'أنت المحقق! اكشف هوية مشتبه واحد كل ليلة'

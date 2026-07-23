@@ -302,7 +302,7 @@ function PlayContent() {
 
   const getNightTargets = () => {
     if (!amIAlive) return [];
-    if (isMafia) return alivePlayers.filter(p => p.id !== playerId && !myRole?.teammates.includes(p.name));
+    if (isMafia) return alivePlayers.filter(p => p.id !== playerId && !(myRole?.teammates || []).includes(p.name));
     if (isDoctor) return alivePlayers;
     if (isDetective) return alivePlayers.filter(p => p.id !== playerId);
     return [];
