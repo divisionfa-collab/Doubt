@@ -238,6 +238,8 @@ export interface VoteUpdateData {
   totalEligible: number;
   /** عدد الأصوات لكل مرشح - بدون كشف من صوّت */
   counts: { playerId: string; playerName: string; votes: number }[];
+  /** عدد اللاعبين اللي اختاروا تخطي التصويت */
+  skipCount: number;
 }
 
 export interface VoteResultData {
@@ -247,6 +249,8 @@ export interface VoteResultData {
   isTie: boolean;
   voteCounts: VoteCount[];
   aliveCount: number;
+  /** عدد اللاعبين اللي تخطّوا التصويت */
+  skipCount: number;
 }
 
 export interface VoteCount {

@@ -868,6 +868,22 @@ function PlayContent() {
                         </button>
                       );
                     })}
+
+                    {/* Skip vote button */}
+                    <button onClick={() => handleVote('SKIP')}
+                      className={`w-full relative overflow-hidden rounded-xl transition-all mt-3 ${
+                        myVote === 'SKIP' ? 'border-2 border-white/40' : 'border-2 border-white/10 hover:border-white/20'
+                      }`}>
+                      <div className={`relative flex items-center gap-3 p-3 ${myVote === 'SKIP' ? 'bg-white/10' : 'bg-white/5'}`}>
+                        <span>{myVote === 'SKIP' ? '🚫' : '⏭️'}</span>
+                        <span className="flex-1 text-right text-doubt-muted">{myVote === 'SKIP' ? 'تخطّيت التصويت' : 'لا أريد التصويت هذه الليلة'}</span>
+                        {voteUpdate && voteUpdate.skipCount > 0 && (
+                          <span className="text-xs text-white/60 font-bold bg-white/10 px-2 py-0.5 rounded-full">
+                            {voteUpdate.skipCount}
+                          </span>
+                        )}
+                      </div>
+                    </button>
                   </div>
                 </div>
               ) : (
@@ -937,6 +953,14 @@ function PlayContent() {
                   <div className="text-5xl mb-3">⚖️</div>
                   <p className="text-2xl font-bold text-doubt-gold">تعادل! لا أحد يُطرد</p>
                 </>
+              ) : voteResult && voteResult.skipCount > 0 ? (
+                <>
+                  <div className="text-5xl mb-3">🚫</div>
+                  <p className="text-2xl font-bold text-doubt-gold">
+                    {voteResult.voteCounts.length === 0 ? 'الجميع تخطى التصويت' : 'الأغلبية اختارت عدم الطرد'}
+                  </p>
+                  <p className="text-sm text-doubt-muted mt-2">{voteResult.skipCount} تخطّوا التصويت</p>
+                </>
               ) : (
                 <p className="text-xl text-doubt-muted">لم يصوّت أحد</p>
               )}
@@ -948,6 +972,12 @@ function PlayContent() {
                       <span className="text-xs text-doubt-gold font-mono">{vc.count}🗳️</span>
                     </div>
                   ))}
+                  {voteResult.skipCount > 0 && (
+                    <div className="flex items-center gap-2 bg-white/5 p-2 rounded-lg opacity-70">
+                      <span className="flex-1 text-right text-sm text-doubt-muted">🚫 متخطّون</span>
+                      <span className="text-xs text-white/60 font-mono">{voteResult.skipCount}⏭️</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

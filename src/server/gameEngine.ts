@@ -1076,16 +1076,22 @@ export function castVote(playerId: string, targetId: string): { success: boolean
   const voter = session.players.find(p => p.id === playerId && p.isAlive);
   if (!voter) return { success: false, error: 'غير مسموح' };
 
-  const target = session.players.find(p => p.id === targetId && p.isAlive && p.id !== playerId);
-  if (!target) return { success: false, error: 'هدف غير صالح' };
+  const isSkip = targetId === 'SKIP';
+  if (!isSkip) {
+    const target = session.players.find(p => p.id === targetId && p.isAlive && p.id !== playerId);
+    if (!target) return { success: false, error: 'هدف غير صالح' };
+  }
 
-  session.votes[playerId] = targetId;
+  session.votes[playerId] = targetId; // 'SKIP' or player ID
   const aliveVoters = session.players.filter(p => p.isAlive);
   const totalVotes = Object.keys(session.votes).length;
+  const skipCount = Object.values(session.votes).filter(v => v === 'SKIP').length;
 
-  // Calculate vote counts per candidate
+  // Calculate vote counts per candidate (SKIP votes not counted against anyone)
   const countMap: Record<string, number> = {};
-  Object.values(session.votes).forEach(tid => { countMap[tid] = (countMap[tid] || 0) + 1; });
+  Object.values(session.votes).forEach(tid => {
+    if (tid !== 'SKIP') countMap[tid] = (countMap[tid] || 0) + 1;
+  });
   const counts = Object.entries(countMap).map(([pid, votes]) => {
     const p = session.players.find(pl => pl.id === pid);
     return { playerId: pid, playerName: p?.name || '?', votes };
@@ -1095,11 +1101,11 @@ export function castVote(playerId: string, targetId: string): { success: boolean
     callbacks.onVoteUpdate(sessionId, {
       voterId: voter.id, voterName: voter.name,
       totalVotes, totalEligible: aliveVoters.length,
-      counts,
+      counts, skipCount,
     });
   }
 
-  // Auto-resolve when everyone has voted
+  // Auto-resolve when everyone has voted (skips included in totalVotes)
   if (totalVotes >= aliveVoters.length) {
     session.votingOpen = false;
     if (callbacks) callbacks.onVotingState(sessionId, false);
@@ -1114,7 +1120,10 @@ function resolveVotes(sessionId: string): void {
   if (!session) return;
 
   const countMap: Record<string, number> = {};
-  Object.values(session.votes).forEach(targetId => { countMap[targetId] = (countMap[targetId] || 0) + 1; });
+  Object.values(session.votes).forEach(targetId => {
+    if (targetId !== 'SKIP') countMap[targetId] = (countMap[targetId] || 0) + 1;
+  });
+  const skipCount = Object.values(session.votes).filter(v => v === 'SKIP').length;
 
   const voteCounts: VoteCount[] = Object.entries(countMap)
     .map(([pid, count]) => ({ playerId: pid, playerName: session.players.find(p => p.id === pid)?.name || '???', count }))
@@ -1123,17 +1132,28 @@ function resolveVotes(sessionId: string): void {
   const aliveCount = session.players.filter(p => p.isAlive).length;
 
   if (voteCounts.length === 0) {
-    const r: VoteResultData = { eliminated: false, eliminatedId: null, eliminatedName: null, isTie: false, voteCounts: [], aliveCount };
+    // الجميع تخطى أو لا يوجد أصوات
+    const r: VoteResultData = { eliminated: false, eliminatedId: null, eliminatedName: null, isTie: false, voteCounts: [], aliveCount, skipCount };
     session.voteResult = r;
     if (callbacks) callbacks.onVoteResult(sessionId, r);
     return;
   }
 
   const maxVotes = voteCounts[0].count;
+
+  // إذا كانت أصوات التخطي >= أعلى مرشح → لا طرد (الأغلبية اختارت عدم الطرد)
+  if (skipCount >= maxVotes) {
+    const r: VoteResultData = { eliminated: false, eliminatedId: null, eliminatedName: null, isTie: false, voteCounts, aliveCount, skipCount };
+    session.voteResult = r;
+    if (callbacks) callbacks.onVoteResult(sessionId, r);
+    console.log(`⚖️ [${session.code}] No elimination — skip votes (${skipCount}) >= top vote (${maxVotes})`);
+    return;
+  }
+
   const topVoted = voteCounts.filter(v => v.count === maxVotes);
 
   if (topVoted.length > 1) {
-    const r: VoteResultData = { eliminated: false, eliminatedId: null, eliminatedName: null, isTie: true, voteCounts, aliveCount };
+    const r: VoteResultData = { eliminated: false, eliminatedId: null, eliminatedName: null, isTie: true, voteCounts, aliveCount, skipCount };
     session.voteResult = r;
     if (callbacks) callbacks.onVoteResult(sessionId, r);
     return;
@@ -1143,7 +1163,7 @@ function resolveVotes(sessionId: string): void {
   if (eliminated) {
     eliminated.isAlive = false;
     const newAlive = session.players.filter(p => p.isAlive).length;
-    const r: VoteResultData = { eliminated: true, eliminatedId: eliminated.id, eliminatedName: eliminated.name, isTie: false, voteCounts, aliveCount: newAlive };
+    const r: VoteResultData = { eliminated: true, eliminatedId: eliminated.id, eliminatedName: eliminated.name, isTie: false, voteCounts, aliveCount: newAlive, skipCount };
     session.voteResult = r;
     if (callbacks) callbacks.onVoteResult(sessionId, r);
 
@@ -1255,9 +1275,9 @@ function resolvePostGame(sessionId: string): void {
   const session = sessions.get(sessionId);
   if (!session || session.phase !== GamePhase.POST_GAME) return;
 
-  // Anyone who didn't respond OR is disconnected = exit
+  // أي شخص لم يستجب = خروج. المقطوعين اللي اختاروا "استمر" يبقون (يقدرون يرجعون)
   session.players.forEach(p => {
-    if (!session.postGameResponses[p.id] || !p.isConnected) {
+    if (!session.postGameResponses[p.id]) {
       session.postGameResponses[p.id] = 'exit';
     }
   });
