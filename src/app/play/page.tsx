@@ -383,9 +383,6 @@ function PlayContent() {
 
   // POST_GAME - Continue/Exit choice
   if (session.phase === GamePhase.POST_GAME && postGameStart) {
-    const deadline = postGameStart.deadline;
-    const secondsLeft = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4 phase-lobby">
         <div className="text-center animate-fade-in max-w-sm w-full">
@@ -408,7 +405,7 @@ function PlayContent() {
                   ❌ أعتذر
                 </button>
               </div>
-              <PostGameTimer deadline={deadline} />
+              <p className="text-doubt-muted text-xs mt-3">في انتظار المدير لبدء الجولة الجديدة...</p>
             </>
           ) : (
             <div className="animate-fade-in">
@@ -419,7 +416,7 @@ function PlayContent() {
                 {postGameChoice === 'continue' ? 'تم تسجيل اختيارك' : 'شكراً لمشاركتك!'}
               </p>
               {postGameChoice === 'continue' && (
-                <p className="text-doubt-muted/50 text-xs">في انتظار البقية...</p>
+                <p className="text-doubt-muted/50 text-xs">في انتظار المدير...</p>
               )}
               {postGameUpdate && (
                 <div className="mt-4 bg-white/5 rounded-xl p-3">

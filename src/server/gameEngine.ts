@@ -282,19 +282,20 @@ export function startGraceCleanupLoop(): void {
       }
 
       const isActiveGame = session.isStarted && !session.isGameOver;
+      const isPostGame = session.phase === GamePhase.POST_GAME;
 
       const toRemove: string[] = [];
       session.players.forEach(player => {
         if (player.isConnected || !player.disconnectedAt) return;
         const offlineMs = Date.now() - player.disconnectedAt;
 
-        if (!isActiveGame) {
-          // اللوبي / post-game: إخراج بعد 15 ثانية (كالسابق)
+        if (!isActiveGame && !isPostGame) {
+          // اللوبي فقط: إخراج بعد 15 ثانية (كالسابق)
           if (offlineMs > GRACE_PERIOD_MS) toRemove.push(player.id);
           return;
         }
 
-        // اللعبة شغّالة: لا نُخرج أبداً — يقدر يرجع أي وقت
+        // اللعبة شغّالة أو POST_GAME: لا نُخرج أبداً — يقدر يرجع أي وقت
         // إذا مقطوع >60 ثانية ويعطّل الليل → نقل الدور
         if (offlineMs > SPECIAL_ROLE_TRANSFER_MS && isPlayerBlockingNight(session, player)) {
           transferDisconnectedRole(sessionId, player.id);
@@ -666,8 +667,7 @@ export function hostRestartGame(hostId: string): { success: boolean; error?: str
     callbacks.onSessionUpdated(sessionId, session);
   }
 
-  // Server-authoritative timer: auto-resolve after deadline
-  setTimeout(() => resolvePostGame(sessionId), duration * 1000);
+  // No auto-resolve timer — host controls when to start new round
 
   return { success: true };
 }
@@ -1234,11 +1234,7 @@ export function postGameRespond(playerId: string, choice: 'continue' | 'exit'): 
     callbacks.onPostGameUpdate(sessionId, update);
   }
 
-  // If all responded, resolve immediately
-  if (Object.keys(session.postGameResponses).length >= session.players.length) {
-    resolvePostGame(sessionId);
-  }
-
+  // No auto-resolve — host decides when to move on, regardless of who responded
   return { success: true };
 }
 
@@ -1321,5 +1317,11 @@ export function hostStartNewRound(hostId: string): { success: boolean; error?: s
   if (session.phase !== GamePhase.POST_GAME) return { success: false, error: 'ليست مرحلة ما بعد اللعبة' };
 
   resolvePostGame(sessionId);
+
+  // بعد resolvePostGame الجلسة صارت LOBBY. لو فيه لاعبين ≥2 نبدأ الجولة مباشرة
+  const s = sessions.get(sessionId);
+  if (s && s.players.length >= 2) {
+    return startGame(hostId);
+  }
   return { success: true };
 }
