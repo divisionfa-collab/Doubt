@@ -443,6 +443,15 @@ export function joinSession(code: string, playerName: string, playerId: string, 
   session.players.push(player);
   playerToSession.set(playerId, sessionId);
   mapSocket(socketId, playerId);
+
+  // إذا انضم أثناء POST_GAME (بين الجولات) → اعتبره "مستمر" تلقائياً
+  if (session.phase === GamePhase.POST_GAME) {
+    session.postGameResponses[playerId] = 'continue';
+    console.log(`✅ [${session.code}] ${playerName} auto-continued (joined during post-game)`);
+    // إشعار المدير بتحديث العدّاد
+    if (callbacks) callbacks.onPostGameUpdate(sessionId, getPostGameUpdate(session));
+  }
+
   console.log(`👤 ${playerName} joined ${code} (${session.players.length} players, pid: ${playerId})`);
   return { session, player };
 }

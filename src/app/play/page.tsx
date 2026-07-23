@@ -443,6 +443,20 @@ function PlayContent() {
     );
   }
 
+  // POST_GAME - new joiner (no postGameStart yet) → waiting UI
+  if (session.phase === GamePhase.POST_GAME) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-4 phase-lobby">
+        <div className="text-center animate-fade-in">
+          <div className="text-6xl mb-4">🎬</div>
+          <p className="text-2xl font-bold text-doubt-gold mb-2">في انتظار الجولة الجديدة</p>
+          <p className="text-doubt-muted text-sm mb-4">المدير على وشك بدء اللعبة...</p>
+          <p className="text-doubt-gold text-lg">{playerName}</p>
+        </div>
+      </div>
+    );
+  }
+
   // Lobby - waiting
   if (!session.isStarted) {
     return (

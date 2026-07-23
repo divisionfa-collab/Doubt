@@ -218,6 +218,7 @@ function HostContent() {
     const canStart = continueCount >= 2;
 
     return (
+      <>
       <div className="min-h-screen flex flex-col items-center justify-center p-4 phase-lobby">
         <div className="text-center animate-fade-in max-w-lg w-full">
           <div className="text-6xl mb-4">🎬</div>
@@ -225,6 +226,18 @@ function HostContent() {
           <p className={`text-lg font-bold mb-6 ${postGameStart.winner === 'MAFIA' ? 'text-doubt-accent' : 'text-green-400'}`}>
             الفائز: {postGameStart.winnerName}
           </p>
+
+          {/* Share code for new joiners */}
+          <div className="bg-white/5 border border-doubt-gold/20 rounded-xl p-3 mb-6">
+            <p className="text-[11px] text-doubt-muted mb-2">🎮 ادعُ أصدقاء جدد للانضمام قبل الجولة</p>
+            <div className="flex items-center justify-center mb-2">
+              <span className="text-doubt-gold font-mono text-2xl tracking-[0.3em] font-bold">{session.code}</span>
+            </div>
+            <button onClick={copyLink}
+              className="w-full py-2 bg-doubt-gold/20 text-doubt-gold rounded-lg text-sm font-bold hover:bg-doubt-gold/30 transition-all">
+              {copied ? '✅ تم النسخ!' : '📋 نسخ الرابط + عرض QR'}
+            </button>
+          </div>
 
           {/* Player Status Cards */}
           <div className="space-y-2 mb-6">
@@ -277,6 +290,41 @@ function HostContent() {
           {!canStart && <p className="text-xs text-doubt-muted mt-2">يجب وجود لاعبين على الأقل</p>}
         </div>
       </div>
+
+      {/* QR Modal also available in POST_GAME */}
+      {showQR && (
+        <div
+          onClick={() => setShowQR(false)}
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#1a1a20] border border-doubt-gold/30 rounded-2xl p-6 max-w-sm w-full text-center relative"
+          >
+            <button
+              onClick={() => setShowQR(false)}
+              className="absolute top-3 left-3 w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-white/60"
+              aria-label="close"
+            >
+              ✕
+            </button>
+            <p className="text-doubt-gold text-sm font-bold mb-1">📱 امسح للانضمام</p>
+            <p className="text-doubt-muted text-xs mb-4">مرّر الجوال للاعبين لمسح الكود</p>
+            <div className="bg-white p-3 rounded-xl inline-block mb-4">
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data=${encodeURIComponent(`${window.location.origin}/join/${session.code}`)}`}
+                alt="QR Code"
+                width={260}
+                height={260}
+                className="block"
+              />
+            </div>
+            <p className="text-doubt-gold font-mono text-lg tracking-[0.3em] mb-1">{session.code}</p>
+            <p className="text-doubt-muted/60 text-[10px] break-all">{`${window.location.origin}/join/${session.code}`}</p>
+          </div>
+        </div>
+      )}
+      </>
     );
   }
 
